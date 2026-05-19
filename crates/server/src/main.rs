@@ -7,7 +7,9 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use shared::{
-    RegisterDeviceRequest, RegisterDeviceResponse, UploadPrekeysRequest, UploadPrekeysResponse,
+    FetchPendingRequest, FetchPendingResponse, FetchPrekeyBundleRequest, FetchPrekeyBundleResponse,
+    PendingMessageItem, PrekeyUploadItem, RegisterDeviceRequest, RegisterDeviceResponse,
+    SendMessageRequest, SendMessageResponse, UploadPrekeysRequest, UploadPrekeysResponse,
 };
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
@@ -95,6 +97,146 @@ async fn upload_prekeys(
     Ok(Json(UploadPrekeysResponse { inserted }))
 }
 
+async fn fetch_prekey_bundle(
+    State(state): State<AppState>,
+    Json(payload): Json<FetchPrekeyBundleRequest>,
+) -> Result<Json<FetchPrekeyBundleResponse>, StatusCode> {
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let device = sqlx::query_as::<_, (Uuid, Vec<u8>, Vec<u8>)>(
+        "SELECT id, identity_key, signed_prekey FROM devices WHERE user_id = $1 AND device_id = $2",
+    )
+    .bind(payload.user_id)
+    .bind(payload.device_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::NOT_FOUND)?;
+
+    let one_time = sqlx::query_as::<_, (i32, Vec<u8>)>(
+        "WITH picked AS ( \
+            SELECT id, key_id, pubkey FROM one_time_prekeys \
+            WHERE device_ref = $1 AND consumed_at IS NULL \
+            ORDER BY id \
+            LIMIT 1 \
+            FOR UPDATE SKIP LOCKED \
+        ) \
+        UPDATE one_time_prekeys p \
+        SET consumed_at = NOW() \
+        FROM picked \
+        WHERE p.id = picked.id \
+        RETURNING picked.key_id, picked.pubkey",
+    )
+    .bind(device.0)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    tx.commit()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(FetchPrekeyBundleResponse {
+        device_uuid: device.0.to_string(),
+        identity_key_b64: STANDARD.encode(device.1),
+        signed_prekey_b64: STANDARD.encode(device.2),
+        one_time_prekey: one_time.map(|(key_id, pubkey)| PrekeyUploadItem {
+            key_id,
+            pubkey_b64: STANDARD.encode(pubkey),
+        }),
+    }))
+}
+
+async fn send_message(
+    State(state): State<AppState>,
+    Json(payload): Json<SendMessageRequest>,
+) -> Result<Json<SendMessageResponse>, StatusCode> {
+    let from_device =
+        Uuid::parse_str(&payload.from_device_uuid).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let to_device =
+        Uuid::parse_str(&payload.to_device_uuid).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let envelope = STANDARD
+        .decode(payload.envelope_b64)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let result = sqlx::query(
+        "INSERT INTO messages (message_id, from_device, to_device, envelope_bytes) \
+         VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (message_id) DO NOTHING",
+    )
+    .bind(payload.message_id)
+    .bind(from_device)
+    .bind(to_device)
+    .bind(envelope)
+    .execute(&state.db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(SendMessageResponse {
+        accepted: result.rows_affected() == 1,
+    }))
+}
+
+async fn fetch_pending(
+    State(state): State<AppState>,
+    Json(payload): Json<FetchPendingRequest>,
+) -> Result<Json<FetchPendingResponse>, StatusCode> {
+    let to_device = Uuid::parse_str(&payload.device_uuid).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let limit = payload.limit.unwrap_or(100).clamp(1, 500);
+
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let rows = sqlx::query_as::<_, (Uuid, String, Uuid, Vec<u8>, i64)>(
+        "SELECT id, message_id, from_device, envelope_bytes, EXTRACT(EPOCH FROM created_at)::BIGINT * 1000 \
+         FROM messages \
+         WHERE to_device = $1 AND delivered_at IS NULL \
+         ORDER BY created_at \
+         LIMIT $2 \
+         FOR UPDATE SKIP LOCKED",
+    )
+    .bind(to_device)
+    .bind(limit)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    for row in &rows {
+        sqlx::query("UPDATE messages SET delivered_at = NOW() WHERE id = $1")
+            .bind(row.0)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let messages = rows
+        .into_iter()
+        .map(
+            |(_, message_id, from_device_uuid, envelope_bytes, created_at_unix_ms)| {
+                PendingMessageItem {
+                    message_id,
+                    from_device_uuid: from_device_uuid.to_string(),
+                    envelope_b64: STANDARD.encode(envelope_bytes),
+                    created_at_unix_ms,
+                }
+            },
+        )
+        .collect();
+
+    Ok(Json(FetchPendingResponse { messages }))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
@@ -111,6 +253,9 @@ async fn main() -> Result<()> {
         .route("/health", get(health))
         .route("/v1/register_device", post(register_device))
         .route("/v1/upload_prekeys", post(upload_prekeys))
+        .route("/v1/fetch_prekey_bundle", post(fetch_prekey_bundle))
+        .route("/v1/send_message", post(send_message))
+        .route("/v1/fetch_pending", post(fetch_pending))
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
