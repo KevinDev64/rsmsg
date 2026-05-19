@@ -101,3 +101,13 @@ pub struct AckMessageRequest {
 pub struct AckMessageResponse {
     pub acked: u64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceLogoutRequest {
+    pub device_uuid: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceLogoutResponse {
+    pub revoked: bool,
+}
