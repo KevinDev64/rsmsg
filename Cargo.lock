@@ -754,6 +754,8 @@ dependencies = [
  "client-core",
  "eframe",
  "egui",
+ "serde",
+ "serde_json",
  "shared",
  "tokio",
  "uuid",

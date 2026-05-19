@@ -10,6 +10,8 @@ anyhow.workspace = true
 client-core = { path = "../client-core" }
 eframe.workspace = true
 egui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 shared = { path = "../shared" }
 tokio.workspace = true
 uuid.workspace = true
