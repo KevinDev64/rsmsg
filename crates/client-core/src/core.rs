@@ -1,11 +1,14 @@
 use anyhow::Result;
 use crypto::CryptoEngine;
-use shared::{DeviceLoginRequest, RegisterDeviceRequest, SendMessageRequest, UploadPrekeysRequest};
+use shared::{
+    DeviceLoginRequest, FetchPrekeyBundleResponse, RegisterDeviceRequest, SendMessageRequest,
+    UploadPrekeysRequest,
+};
 use uuid::Uuid;
 
 use crate::{
     transport::ApiTransport,
-    types::{ClientConfig, DecryptedMessage, DeviceAuth, PendingEnvelope},
+    types::{ClientConfig, DecryptedMessage, DeviceAuth, LocalDeviceKeys, PendingEnvelope},
 };
 
 pub struct ClientCore {
@@ -27,6 +30,31 @@ impl ClientCore {
 
     pub fn generate_shared_key_b64(&self) -> String {
         self.crypto.generate_shared_key_b64()
+    }
+
+    pub fn generate_local_device_keys(&self) -> LocalDeviceKeys {
+        let identity = self.crypto.generate_x25519_keypair();
+        let signed = self.crypto.generate_x25519_keypair();
+        LocalDeviceKeys {
+            identity_private_b64: identity.private_b64,
+            identity_public_b64: identity.public_b64,
+            signed_prekey_private_b64: signed.private_b64,
+            signed_prekey_public_b64: signed.public_b64,
+        }
+    }
+
+    pub fn build_register_request(
+        &self,
+        user_id: String,
+        device_id: String,
+        keys: &LocalDeviceKeys,
+    ) -> RegisterDeviceRequest {
+        RegisterDeviceRequest {
+            user_id,
+            device_id,
+            identity_key_b64: keys.identity_public_b64.clone(),
+            signed_prekey_b64: keys.signed_prekey_public_b64.clone(),
+        }
     }
 
     pub async fn register_device(&self, req: RegisterDeviceRequest) -> Result<String> {
@@ -92,6 +120,27 @@ impl ClientCore {
 
     pub async fn ws_drain_once(&self, auth: &DeviceAuth) -> Result<Vec<PendingEnvelope>> {
         self.transport.ws_once(auth).await
+    }
+
+    pub async fn derive_peer_shared_key(
+        &self,
+        local_keys: &LocalDeviceKeys,
+        peer_user_id: String,
+        peer_device_id: String,
+    ) -> Result<(String, FetchPrekeyBundleResponse)> {
+        let bundle = self
+            .transport
+            .fetch_prekey_bundle(peer_user_id, peer_device_id)
+            .await?;
+        let peer_pub = if let Some(one_time) = &bundle.one_time_prekey {
+            one_time.pubkey_b64.clone()
+        } else {
+            bundle.signed_prekey_b64.clone()
+        };
+        let key_b64 = self
+            .crypto
+            .derive_shared_key_b64(&local_keys.identity_private_b64, &peer_pub)?;
+        Ok((key_b64, bundle))
     }
 
     pub fn decrypt_pending(

@@ -3,8 +3,9 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{HeaderMap, HeaderValue};
 use shared::{
     AckMessageRequest, DeviceLoginRequest, DeviceLoginResponse, FetchPendingRequest,
-    FetchPendingResponse, RegisterDeviceRequest, RegisterDeviceResponse, SendMessageRequest,
-    SendMessageResponse, UploadPrekeysRequest, UploadPrekeysResponse,
+    FetchPendingResponse, FetchPrekeyBundleRequest, FetchPrekeyBundleResponse,
+    RegisterDeviceRequest, RegisterDeviceResponse, SendMessageRequest, SendMessageResponse,
+    UploadPrekeysRequest, UploadPrekeysResponse,
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -80,6 +81,23 @@ impl ApiTransport {
             .await?;
         if !response.status().is_success() {
             return Err(anyhow!("send_message failed with {}", response.status()));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn fetch_prekey_bundle(
+        &self,
+        user_id: String,
+        device_id: String,
+    ) -> Result<FetchPrekeyBundleResponse> {
+        let url = format!("{}/v1/fetch_prekey_bundle", self.cfg.http_base);
+        let req = FetchPrekeyBundleRequest { user_id, device_id };
+        let response = self.client.post(url).json(&req).send().await?;
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "fetch_prekey_bundle failed with {}",
+                response.status()
+            ));
         }
         Ok(response.json().await?)
     }

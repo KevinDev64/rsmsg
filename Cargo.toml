@@ -22,6 +22,7 @@ chacha20poly1305 = { version = "0.10", features = ["std"] }
 eframe = "0.33"
 egui = "0.33"
 futures-util = "0.3"
+hkdf = "0.12"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
@@ -32,3 +33,4 @@ tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }

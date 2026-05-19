@@ -34,3 +34,11 @@ pub struct DecryptedMessage {
     pub plaintext: String,
     pub created_at_unix_ms: i64,
 }
+
+#[derive(Clone, Debug)]
+pub struct LocalDeviceKeys {
+    pub identity_private_b64: String,
+    pub identity_public_b64: String,
+    pub signed_prekey_private_b64: String,
+    pub signed_prekey_public_b64: String,
+}

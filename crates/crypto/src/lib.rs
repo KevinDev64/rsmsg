@@ -4,9 +4,17 @@ use chacha20poly1305::{
     KeyInit, XChaCha20Poly1305, XNonce,
     aead::{Aead, generic_array::GenericArray},
 };
+use hkdf::Hkdf;
 use rand::{RngCore, rngs::OsRng};
+use sha2::Sha256;
+use x25519_dalek::{PublicKey, StaticSecret};
 
 pub struct CryptoEngine;
+
+pub struct X25519KeyPair {
+    pub private_b64: String,
+    pub public_b64: String,
+}
 
 impl CryptoEngine {
     pub fn new() -> Self {
@@ -21,6 +29,33 @@ impl CryptoEngine {
         let mut key = [0_u8; 32];
         OsRng.fill_bytes(&mut key);
         STANDARD.encode(key)
+    }
+
+    pub fn generate_x25519_keypair(&self) -> X25519KeyPair {
+        let secret = StaticSecret::random_from_rng(OsRng);
+        let public = PublicKey::from(&secret);
+        X25519KeyPair {
+            private_b64: STANDARD.encode(secret.to_bytes()),
+            public_b64: STANDARD.encode(public.as_bytes()),
+        }
+    }
+
+    pub fn derive_shared_key_b64(
+        &self,
+        own_private_b64: &str,
+        peer_public_b64: &str,
+    ) -> Result<String> {
+        let own_private = decode_key(own_private_b64)?;
+        let peer_public = decode_key(peer_public_b64)?;
+        let secret = StaticSecret::from(own_private);
+        let peer = PublicKey::from(peer_public);
+        let dh = secret.diffie_hellman(&peer);
+
+        let hk = Hkdf::<Sha256>::new(None, dh.as_bytes());
+        let mut key = [0_u8; 32];
+        hk.expand(b"rsmsg-chat-key", &mut key)
+            .map_err(|_| anyhow!("hkdf expand failed"))?;
+        Ok(STANDARD.encode(key))
     }
 
     pub fn encrypt_text_to_b64(&self, key_b64: &str, plaintext: &str) -> Result<String> {
