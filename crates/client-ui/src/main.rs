@@ -99,22 +99,21 @@ impl MessengerApp {
             self.status = "Login required".to_string();
             return;
         };
-        if self.peer_device_uuid.is_empty() || self.peer_shared_key_b64.is_empty() {
+        if self.peer_device_uuid.is_empty() {
             self.status = "Derive peer key first".to_string();
             return;
         }
 
-        match self.runtime.block_on(self.core.send_text_message(
+        match self.runtime.block_on(self.core.send_text_to_peer(
             &auth,
             self.peer_device_uuid.clone(),
             self.plaintext_message.clone(),
-            &self.peer_shared_key_b64,
         )) {
             Ok(true) => {
                 self.status = "Message accepted".to_string();
                 self.plaintext_message.clear();
             }
-            Ok(false) => self.status = "Duplicate message rejected".to_string(),
+            Ok(false) => self.status = "No peer session key; derive first".to_string(),
             Err(err) => self.status = format!("Send failed: {err}"),
         }
     }
@@ -129,10 +128,15 @@ impl MessengerApp {
             .block_on(self.core.fetch_pending(&auth, Some(100)))
         {
             Ok(messages) => {
+                let (decrypted, ack_ids) =
+                    self.core.decrypt_pending_with_sessions(messages.clone());
+                if !ack_ids.is_empty() {
+                    let _ = self
+                        .runtime
+                        .block_on(self.core.ack_messages(&auth, ack_ids));
+                }
                 self.status = format!("Fetched {} messages", messages.len());
-                self.decrypted_inbox = self
-                    .core
-                    .decrypt_pending(messages.clone(), &self.peer_shared_key_b64);
+                self.decrypted_inbox = decrypted;
                 self.inbox = messages;
             }
             Err(err) => self.status = format!("Fetch failed: {err}"),
@@ -146,10 +150,15 @@ impl MessengerApp {
         };
         match self.runtime.block_on(self.core.ws_drain_once(&auth)) {
             Ok(messages) => {
+                let (decrypted, ack_ids) =
+                    self.core.decrypt_pending_with_sessions(messages.clone());
+                if !ack_ids.is_empty() {
+                    let _ = self
+                        .runtime
+                        .block_on(self.core.ack_messages(&auth, ack_ids));
+                }
                 self.status = format!("WS pulled {} messages", messages.len());
-                self.decrypted_inbox = self
-                    .core
-                    .decrypt_pending(messages.clone(), &self.peer_shared_key_b64);
+                self.decrypted_inbox = decrypted;
                 self.inbox = messages;
             }
             Err(err) => self.status = format!("WS failed: {err}"),
