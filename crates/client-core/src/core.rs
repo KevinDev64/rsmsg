@@ -1,10 +1,11 @@
 use anyhow::Result;
 use crypto::CryptoEngine;
 use shared::{DeviceLoginRequest, RegisterDeviceRequest, SendMessageRequest, UploadPrekeysRequest};
+use uuid::Uuid;
 
 use crate::{
     transport::ApiTransport,
-    types::{ClientConfig, DeviceAuth, PendingEnvelope},
+    types::{ClientConfig, DecryptedMessage, DeviceAuth, PendingEnvelope},
 };
 
 pub struct ClientCore {
@@ -22,6 +23,10 @@ impl ClientCore {
 
     pub fn healthcheck(&self) -> Result<()> {
         self.crypto.healthcheck()
+    }
+
+    pub fn generate_shared_key_b64(&self) -> String {
+        self.crypto.generate_shared_key_b64()
     }
 
     pub async fn register_device(&self, req: RegisterDeviceRequest) -> Result<String> {
@@ -54,6 +59,25 @@ impl ClientCore {
         Ok(response.accepted)
     }
 
+    pub async fn send_text_message(
+        &self,
+        auth: &DeviceAuth,
+        to_device_uuid: String,
+        plaintext: String,
+        shared_key_b64: &str,
+    ) -> Result<bool> {
+        let envelope_b64 = self
+            .crypto
+            .encrypt_text_to_b64(shared_key_b64, &plaintext)?;
+        let req = SendMessageRequest {
+            message_id: Uuid::new_v4().to_string(),
+            from_device_uuid: auth.device_uuid.clone(),
+            to_device_uuid,
+            envelope_b64,
+        };
+        self.send_message(auth, req).await
+    }
+
     pub async fn fetch_pending(
         &self,
         auth: &DeviceAuth,
@@ -68,5 +92,26 @@ impl ClientCore {
 
     pub async fn ws_drain_once(&self, auth: &DeviceAuth) -> Result<Vec<PendingEnvelope>> {
         self.transport.ws_once(auth).await
+    }
+
+    pub fn decrypt_pending(
+        &self,
+        pending: Vec<PendingEnvelope>,
+        shared_key_b64: &str,
+    ) -> Vec<DecryptedMessage> {
+        pending
+            .into_iter()
+            .filter_map(|item| {
+                self.crypto
+                    .decrypt_text_from_b64(shared_key_b64, &item.envelope_b64)
+                    .ok()
+                    .map(|plaintext| DecryptedMessage {
+                        message_id: item.message_id,
+                        from_device_uuid: item.from_device_uuid,
+                        plaintext,
+                        created_at_unix_ms: item.created_at_unix_ms,
+                    })
+            })
+            .collect()
     }
 }

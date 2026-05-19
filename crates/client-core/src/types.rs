@@ -26,3 +26,11 @@ pub struct PendingEnvelope {
     pub envelope_b64: String,
     pub created_at_unix_ms: i64,
 }
+
+#[derive(Clone, Debug)]
+pub struct DecryptedMessage {
+    pub message_id: String,
+    pub from_device_uuid: String,
+    pub plaintext: String,
+    pub created_at_unix_ms: i64,
+}
