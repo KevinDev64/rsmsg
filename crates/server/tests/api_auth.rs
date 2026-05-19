@@ -43,3 +43,20 @@ async fn upload_prekeys_without_auth_returns_unauthorized() {
     let res = app.oneshot(req).await.expect("response");
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn websocket_without_auth_returns_unauthorized() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/ws")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .body(Body::empty())
+        .expect("request");
+
+    let res = app.oneshot(req).await.expect("response");
+    assert_eq!(res.status(), StatusCode::UPGRADE_REQUIRED);
+}
