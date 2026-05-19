@@ -97,6 +97,11 @@ impl ClientCore {
         Ok(response.ok)
     }
 
+    pub async fn search_users(&self, query: String) -> Result<Vec<String>> {
+        let response = self.transport.user_search(query).await?;
+        Ok(response.users)
+    }
+
     pub async fn login_device(&self, user_id: String, device_id: String) -> Result<DeviceAuth> {
         let response = self
             .transport

@@ -5,7 +5,7 @@ use argon2::{
 use axum::http::StatusCode;
 use shared::{
     ResolveUserRequest, ResolveUserResponse, UserLoginRequest, UserLoginResponse,
-    UserRegisterRequest, UserRegisterResponse,
+    UserRegisterRequest, UserRegisterResponse, UserSearchRequest, UserSearchResponse,
 };
 
 use crate::{
@@ -80,4 +80,17 @@ pub async fn resolve_user(
     Ok(ResolveUserResponse {
         device_uuid: device_uuid.to_string(),
     })
+}
+
+pub async fn search_users(
+    db: &sqlx::PgPool,
+    payload: UserSearchRequest,
+) -> ApiResult<UserSearchResponse> {
+    if payload.query.trim().is_empty() {
+        return Ok(UserSearchResponse { users: Vec::new() });
+    }
+    let users = users::search_users(db, payload.query)
+        .await
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    Ok(UserSearchResponse { users })
 }

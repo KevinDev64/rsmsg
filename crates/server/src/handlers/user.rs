@@ -2,7 +2,7 @@ use axum::http::StatusCode;
 use axum::{Json, extract::State};
 use shared::{
     ResolveUserRequest, ResolveUserResponse, UserLoginRequest, UserLoginResponse,
-    UserRegisterRequest, UserRegisterResponse,
+    UserRegisterRequest, UserRegisterResponse, UserSearchRequest, UserSearchResponse,
 };
 
 use crate::{
@@ -45,4 +45,11 @@ pub async fn resolve_user(
     Json(payload): Json<ResolveUserRequest>,
 ) -> ApiResult<Json<ResolveUserResponse>> {
     Ok(Json(user::resolve_user(&state.db, payload).await?))
+}
+
+pub async fn user_search(
+    State(state): State<AppState>,
+    Json(payload): Json<UserSearchRequest>,
+) -> ApiResult<Json<UserSearchResponse>> {
+    Ok(Json(user::search_users(&state.db, payload).await?))
 }

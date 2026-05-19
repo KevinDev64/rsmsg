@@ -7,6 +7,7 @@ use shared::{
     RegisterDeviceRequest, RegisterDeviceResponse, ResolveUserRequest, ResolveUserResponse,
     SendMessageRequest, SendMessageResponse, UploadPrekeysRequest, UploadPrekeysResponse,
     UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserRegisterResponse,
+    UserSearchRequest, UserSearchResponse,
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -53,6 +54,20 @@ impl ApiTransport {
         let response = self.client.post(url).json(&req).send().await?;
         if !response.status().is_success() {
             return Err(anyhow!("user_login failed with {}", response.status()));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn user_search(&self, query: String) -> Result<UserSearchResponse> {
+        let url = format!("{}/v1/user_search", self.cfg.http_base);
+        let response = self
+            .client
+            .post(url)
+            .json(&UserSearchRequest { query })
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow!("user_search failed with {}", response.status()));
         }
         Ok(response.json().await?)
     }

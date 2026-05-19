@@ -144,3 +144,13 @@ pub struct ResolveUserRequest {
 pub struct ResolveUserResponse {
     pub device_uuid: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserSearchRequest {
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserSearchResponse {
+    pub users: Vec<String>,
+}

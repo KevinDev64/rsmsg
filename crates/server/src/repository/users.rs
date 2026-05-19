@@ -22,3 +22,13 @@ pub async fn get_password_hash(
         .fetch_optional(db)
         .await
 }
+
+pub async fn search_users(db: &sqlx::PgPool, query: String) -> Result<Vec<String>, sqlx::Error> {
+    let pattern = format!("{}%", query);
+    sqlx::query_scalar::<_, String>(
+        "SELECT user_id FROM users WHERE user_id ILIKE $1 ORDER BY user_id LIMIT 20",
+    )
+    .bind(pattern)
+    .fetch_all(db)
+    .await
+}

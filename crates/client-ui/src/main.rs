@@ -15,6 +15,7 @@ const HISTORY_FILE: &str = ".rsmsg_chat_history.json";
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
+        run_and_return: false,
         ..Default::default()
     };
     eframe::run_native(
@@ -65,6 +66,7 @@ struct MessengerApp {
     auth: Option<DeviceAuth>,
     status: String,
     peer_nickname_input: String,
+    peer_search_results: Vec<String>,
     selected_chat: String,
     peer_device_uuid: String,
     message_input: String,
@@ -84,6 +86,7 @@ impl MessengerApp {
             auth: None,
             status: "Not logged in".to_string(),
             peer_nickname_input: String::new(),
+            peer_search_results: Vec::new(),
             selected_chat: String::new(),
             peer_device_uuid: String::new(),
             message_input: String::new(),
@@ -199,6 +202,24 @@ impl MessengerApp {
                 self.status = format!("Open chat failed: {err}");
                 let _ = auth;
             }
+        }
+    }
+
+    fn search_users(&mut self) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        match rt.block_on(self.core.search_users(self.peer_nickname_input.clone())) {
+            Ok(users) => {
+                self.peer_search_results = users;
+                if self.peer_search_results.is_empty() {
+                    self.status = "No users found".to_string();
+                } else {
+                    self.status = format!("Found {} users", self.peer_search_results.len());
+                }
+            }
+            Err(err) => self.status = format!("Search failed: {err}"),
         }
     }
 
@@ -319,6 +340,14 @@ impl eframe::App for MessengerApp {
             ui.heading("New chat");
             ui.label("Peer nickname");
             ui.text_edit_singleline(&mut self.peer_nickname_input);
+            if ui.button("Search users").clicked() {
+                self.search_users();
+            }
+            for nick in &self.peer_search_results {
+                if ui.button(format!("@{nick}")).clicked() {
+                    self.peer_nickname_input = nick.clone();
+                }
+            }
             if ui.button("Open chat").clicked() {
                 self.open_chat();
             }
