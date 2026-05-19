@@ -2,7 +2,7 @@ use anyhow::Result;
 use crypto::CryptoEngine;
 use shared::{
     DeviceLoginRequest, FetchPrekeyBundleResponse, RegisterDeviceRequest, SendMessageRequest,
-    UploadPrekeysRequest,
+    UploadPrekeysRequest, UserLoginRequest, UserRegisterRequest,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -79,6 +79,22 @@ impl ClientCore {
     pub async fn register_device(&self, req: RegisterDeviceRequest) -> Result<String> {
         let response = self.transport.register_device(req).await?;
         Ok(response.device_uuid)
+    }
+
+    pub async fn register_user(&self, user_id: String, password: String) -> Result<bool> {
+        let response = self
+            .transport
+            .user_register(UserRegisterRequest { user_id, password })
+            .await?;
+        Ok(response.created)
+    }
+
+    pub async fn login_user(&self, user_id: String, password: String) -> Result<bool> {
+        let response = self
+            .transport
+            .user_login(UserLoginRequest { user_id, password })
+            .await?;
+        Ok(response.ok)
     }
 
     pub async fn login_device(&self, user_id: String, device_id: String) -> Result<DeviceAuth> {

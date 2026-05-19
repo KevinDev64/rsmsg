@@ -61,6 +61,7 @@ struct MessengerApp {
     local_keys: LocalDeviceKeys,
     history: ChatHistory,
     nickname: String,
+    password: String,
     auth: Option<DeviceAuth>,
     status: String,
     peer_nickname_input: String,
@@ -79,6 +80,7 @@ impl MessengerApp {
             local_keys,
             history: ChatHistory::load(),
             nickname: String::new(),
+            password: String::new(),
             auth: None,
             status: "Not logged in".to_string(),
             peer_nickname_input: String::new(),
@@ -89,20 +91,50 @@ impl MessengerApp {
         }
     }
 
-    fn register_or_login(&mut self) {
-        if self.nickname.trim().is_empty() {
-            self.status = "Enter your nickname".to_string();
+    fn register_or_login(&mut self, create: bool) {
+        if self.nickname.trim().is_empty() || self.password.len() < 6 {
+            self.status = "Enter nickname and password (>=6)".to_string();
             return;
         }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        if create {
+            match rt.block_on(
+                self.core
+                    .register_user(self.nickname.clone(), self.password.clone()),
+            ) {
+                Ok(true) => self.status = "Account created".to_string(),
+                Ok(false) => self.status = "Nickname already exists".to_string(),
+                Err(err) => {
+                    self.status = format!("Account create failed: {err}");
+                    return;
+                }
+            }
+        }
+
+        match rt.block_on(
+            self.core
+                .login_user(self.nickname.clone(), self.password.clone()),
+        ) {
+            Ok(true) => {}
+            Ok(false) => {
+                self.status = "Invalid credentials".to_string();
+                return;
+            }
+            Err(err) => {
+                self.status = format!("User login failed: {err}");
+                return;
+            }
+        }
+
         let req = self.core.build_register_request(
             self.nickname.clone(),
             DEFAULT_DEVICE_ID.to_string(),
             &self.local_keys,
         );
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
         if let Err(err) = rt.block_on(self.core.register_device(req)) {
             self.status = format!("Register failed: {err}");
             return;
@@ -260,8 +292,13 @@ impl eframe::App for MessengerApp {
             ui.heading("Account");
             ui.label("Nickname");
             ui.text_edit_singleline(&mut self.nickname);
-            if ui.button("Register / Login").clicked() {
-                self.register_or_login();
+            ui.label("Password");
+            ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
+            if ui.button("Register").clicked() {
+                self.register_or_login(true);
+            }
+            if ui.button("Login").clicked() {
+                self.register_or_login(false);
             }
 
             ui.separator();

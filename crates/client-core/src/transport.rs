@@ -5,7 +5,8 @@ use shared::{
     AckMessageRequest, DeviceLoginRequest, DeviceLoginResponse, FetchPendingRequest,
     FetchPendingResponse, FetchPrekeyBundleRequest, FetchPrekeyBundleResponse,
     RegisterDeviceRequest, RegisterDeviceResponse, SendMessageRequest, SendMessageResponse,
-    UploadPrekeysRequest, UploadPrekeysResponse,
+    UploadPrekeysRequest, UploadPrekeysResponse, UserLoginRequest, UserLoginResponse,
+    UserRegisterRequest, UserRegisterResponse,
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -34,6 +35,24 @@ impl ApiTransport {
         let response = self.client.post(url).json(&req).send().await?;
         if !response.status().is_success() {
             return Err(anyhow!("register_device failed with {}", response.status()));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn user_register(&self, req: UserRegisterRequest) -> Result<UserRegisterResponse> {
+        let url = format!("{}/v1/user_register", self.cfg.http_base);
+        let response = self.client.post(url).json(&req).send().await?;
+        if !response.status().is_success() {
+            return Err(anyhow!("user_register failed with {}", response.status()));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn user_login(&self, req: UserLoginRequest) -> Result<UserLoginResponse> {
+        let url = format!("{}/v1/user_login", self.cfg.http_base);
+        let response = self.client.post(url).json(&req).send().await?;
+        if !response.status().is_success() {
+            return Err(anyhow!("user_login failed with {}", response.status()));
         }
         Ok(response.json().await?)
     }
