@@ -64,6 +64,14 @@ cargo run -p server
 cargo run -p client-ui
 ```
 
+Для запуска нескольких клиентов на одной машине используйте разные профили,
+иначе они будут делить одни и те же локальные ключи/сессии/историю:
+
+```bash
+RSMSG_PROFILE=alice cargo run -p client-ui
+RSMSG_PROFILE=bob cargo run -p client-ui
+```
+
 ## 7) Сценарий ручного теста (2 пользователя)
 
 Откройте **два** окна клиента (`client-ui`).

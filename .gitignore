@@ -3,3 +3,6 @@ deploy/.env
 .rsmsg_local_keys.json
 .rsmsg_peer_sessions.json
 .rsmsg_chat_history.json
+.rsmsg_local_keys.*.json
+.rsmsg_peer_sessions.*.json
+.rsmsg_chat_history.*.json

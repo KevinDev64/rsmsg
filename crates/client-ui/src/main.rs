@@ -10,7 +10,10 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_DEVICE_ID: &str = "main";
-const HISTORY_FILE: &str = ".rsmsg_chat_history.json";
+fn history_file() -> String {
+    let profile = std::env::var("RSMSG_PROFILE").unwrap_or_else(|_| "default".to_string());
+    format!(".rsmsg_chat_history.{profile}.json")
+}
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -44,7 +47,8 @@ struct ChatHistory {
 
 impl ChatHistory {
     fn load() -> Self {
-        let path = Path::new(HISTORY_FILE);
+        let file = history_file();
+        let path = Path::new(&file);
         if !path.exists() {
             return Self::default();
         }
@@ -56,7 +60,7 @@ impl ChatHistory {
 
     fn save(&self) {
         if let Ok(raw) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(HISTORY_FILE, raw);
+            let _ = fs::write(history_file(), raw);
         }
     }
 }
