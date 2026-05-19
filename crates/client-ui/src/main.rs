@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use client_core::{ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, LocalDeviceKeys};
 use eframe::egui;
@@ -29,6 +34,7 @@ struct ChatMessage {
 #[derive(Default, Serialize, Deserialize)]
 struct ChatHistory {
     chats: BTreeMap<String, Vec<ChatMessage>>,
+    peer_by_device_uuid: BTreeMap<String, String>,
 }
 
 impl ChatHistory {
@@ -61,6 +67,7 @@ struct MessengerApp {
     selected_chat: String,
     peer_device_uuid: String,
     message_input: String,
+    last_sync_at: Instant,
 }
 
 impl MessengerApp {
@@ -78,6 +85,7 @@ impl MessengerApp {
             selected_chat: String::new(),
             peer_device_uuid: String::new(),
             message_input: String::new(),
+            last_sync_at: Instant::now(),
         }
     }
 
@@ -135,6 +143,10 @@ impl MessengerApp {
                 self.peer_device_uuid = bundle.device_uuid;
                 self.selected_chat = peer.clone();
                 self.history.chats.entry(peer.clone()).or_default();
+                self.history
+                    .peer_by_device_uuid
+                    .insert(self.peer_device_uuid.clone(), peer.clone());
+                self.history.save();
                 self.status = format!("Chat with @{peer} ready");
             }
             Err(err) => {
@@ -205,14 +217,22 @@ impl MessengerApp {
             self.push_incoming(msg);
         }
         self.history.save();
+        self.last_sync_at = Instant::now();
     }
 
     fn push_incoming(&mut self, msg: DecryptedMessage) {
-        let chat = self
+        let nick = self
             .history
-            .chats
-            .entry(self.selected_chat.clone())
-            .or_default();
+            .peer_by_device_uuid
+            .get(&msg.from_device_uuid)
+            .cloned()
+            .unwrap_or_else(|| {
+                format!(
+                    "unknown:{}",
+                    &msg.from_device_uuid[..8.min(msg.from_device_uuid.len())]
+                )
+            });
+        let chat = self.history.chats.entry(nick).or_default();
         chat.push(ChatMessage {
             outgoing: false,
             text: msg.plaintext,
@@ -223,6 +243,11 @@ impl MessengerApp {
 
 impl eframe::App for MessengerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ctx.request_repaint_after(Duration::from_millis(800));
+        if self.auth.is_some() && self.last_sync_at.elapsed() >= Duration::from_secs(2) {
+            self.sync_incoming();
+        }
+
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("rsmsg");
@@ -261,6 +286,14 @@ impl eframe::App for MessengerApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            if self.auth.is_none() {
+                ui.heading("Welcome to rsmsg");
+                ui.label("1) Enter your nickname");
+                ui.label("2) Press Register / Login");
+                ui.label("3) Open chat by peer nickname");
+                return;
+            }
+
             if self.selected_chat.is_empty() {
                 ui.heading("Select or create a chat");
                 return;
