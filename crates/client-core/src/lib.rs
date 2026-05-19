@@ -1,18 +1,6 @@
-use anyhow::Result;
-use crypto::CryptoEngine;
+mod core;
+mod transport;
+mod types;
 
-pub struct ClientCore {
-    crypto: CryptoEngine,
-}
-
-impl ClientCore {
-    pub fn new() -> Self {
-        Self {
-            crypto: CryptoEngine::new(),
-        }
-    }
-
-    pub fn healthcheck(&self) -> Result<()> {
-        self.crypto.healthcheck()
-    }
-}
+pub use core::ClientCore;
+pub use types::{ClientConfig, DeviceAuth, PendingEnvelope};
