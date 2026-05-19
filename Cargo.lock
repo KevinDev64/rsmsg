@@ -1338,6 +1338,7 @@ dependencies = [
  "shared",
  "sqlx",
  "tokio",
+ "tower",
  "uuid",
 ]
 

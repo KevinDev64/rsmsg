@@ -15,3 +15,6 @@ sqlx.workspace = true
 tokio.workspace = true
 shared = { path = "../shared" }
 uuid.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
