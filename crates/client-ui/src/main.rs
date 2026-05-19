@@ -35,7 +35,7 @@ impl MessengerApp {
         let runtime = Runtime::new().expect("tokio runtime");
         let core = ClientCore::new(ClientConfig::local_default());
         let _ = core.healthcheck();
-        let local_keys = core.generate_local_device_keys();
+        let local_keys = core.load_or_create_local_device_keys();
         Self {
             runtime,
             core,
