@@ -111,3 +111,25 @@ pub struct DeviceLogoutRequest {
 pub struct DeviceLogoutResponse {
     pub revoked: bool,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserRegisterRequest {
+    pub user_id: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserRegisterResponse {
+    pub created: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserLoginRequest {
+    pub user_id: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserLoginResponse {
+    pub ok: bool,
+}

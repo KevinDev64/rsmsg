@@ -5,12 +5,14 @@ use axum::{
 
 use crate::{
     app_state::AppState,
-    handlers::{device, health, messaging, ws},
+    handlers::{device, health, messaging, user, ws},
 };
 
 pub fn build_router(app_state: AppState) -> Router {
     Router::new()
         .route("/health", get(health::health))
+        .route("/v1/user_register", post(user::user_register))
+        .route("/v1/user_login", post(user::user_login))
         .route("/v1/ws", get(ws::ws_realtime))
         .route("/v1/register_device", post(device::register_device))
         .route("/v1/device_login", post(device::device_login))
