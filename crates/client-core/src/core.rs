@@ -209,6 +209,11 @@ impl ClientCore {
         Ok((key_b64, bundle))
     }
 
+    pub async fn resolve_user_device(&self, user_id: String, device_id: String) -> Result<String> {
+        let response = self.transport.resolve_user(user_id, device_id).await?;
+        Ok(response.device_uuid)
+    }
+
     pub fn decrypt_pending(
         &self,
         pending: Vec<PendingEnvelope>,

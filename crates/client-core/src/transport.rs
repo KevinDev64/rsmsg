@@ -4,9 +4,9 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use shared::{
     AckMessageRequest, DeviceLoginRequest, DeviceLoginResponse, FetchPendingRequest,
     FetchPendingResponse, FetchPrekeyBundleRequest, FetchPrekeyBundleResponse,
-    RegisterDeviceRequest, RegisterDeviceResponse, SendMessageRequest, SendMessageResponse,
-    UploadPrekeysRequest, UploadPrekeysResponse, UserLoginRequest, UserLoginResponse,
-    UserRegisterRequest, UserRegisterResponse,
+    RegisterDeviceRequest, RegisterDeviceResponse, ResolveUserRequest, ResolveUserResponse,
+    SendMessageRequest, SendMessageResponse, UploadPrekeysRequest, UploadPrekeysResponse,
+    UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserRegisterResponse,
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -117,6 +117,20 @@ impl ApiTransport {
                 "fetch_prekey_bundle failed with {}",
                 response.status()
             ));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn resolve_user(
+        &self,
+        user_id: String,
+        device_id: String,
+    ) -> Result<ResolveUserResponse> {
+        let url = format!("{}/v1/resolve_user", self.cfg.http_base);
+        let req = ResolveUserRequest { user_id, device_id };
+        let response = self.client.post(url).json(&req).send().await?;
+        if !response.status().is_success() {
+            return Err(anyhow!("resolve_user failed with {}", response.status()));
         }
         Ok(response.json().await?)
     }

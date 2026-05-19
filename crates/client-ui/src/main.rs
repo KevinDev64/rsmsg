@@ -165,6 +165,16 @@ impl MessengerApp {
             .enable_all()
             .build()
             .expect("runtime");
+
+        let resolved = rt.block_on(
+            self.core
+                .resolve_user_device(peer.clone(), DEFAULT_DEVICE_ID.to_string()),
+        );
+        let Ok(resolved_uuid) = resolved else {
+            self.status = "Peer not found".to_string();
+            return;
+        };
+
         let derive = rt.block_on(self.core.derive_peer_shared_key(
             &self.local_keys,
             peer.clone(),
@@ -172,7 +182,11 @@ impl MessengerApp {
         ));
         match derive {
             Ok((_key, bundle)) => {
-                self.peer_device_uuid = bundle.device_uuid;
+                if bundle.device_uuid != resolved_uuid {
+                    self.status = "Peer resolve mismatch, retry".to_string();
+                    return;
+                }
+                self.peer_device_uuid = resolved_uuid;
                 self.selected_chat = peer.clone();
                 self.history.chats.entry(peer.clone()).or_default();
                 self.history
