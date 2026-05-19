@@ -78,3 +78,26 @@ pub struct PendingMessageItem {
 pub struct FetchPendingResponse {
     pub messages: Vec<PendingMessageItem>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceLoginRequest {
+    pub user_id: String,
+    pub device_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceLoginResponse {
+    pub device_uuid: String,
+    pub auth_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AckMessageRequest {
+    pub device_uuid: String,
+    pub message_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AckMessageResponse {
+    pub acked: u64,
+}
