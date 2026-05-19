@@ -2,7 +2,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use server::{app_state::AppState, router::build_router};
+use server::{app_state::AppState, login_rate_limit::LoginRateLimiter, router::build_router};
 use sqlx::postgres::PgPoolOptions;
 use tower::util::ServiceExt;
 
@@ -11,7 +11,10 @@ fn test_app() -> axum::Router {
         .max_connections(1)
         .connect_lazy("postgres://localhost/rsmsg")
         .expect("lazy pool");
-    build_router(AppState { db })
+    build_router(AppState {
+        db,
+        login_rate_limiter: LoginRateLimiter::new(),
+    })
 }
 
 #[tokio::test]
