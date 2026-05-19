@@ -206,6 +206,12 @@ impl eframe::App for MessengerApp {
                     self.derive_peer_key();
                 }
                 ui.label(format!("Peer device uuid: {}", self.peer_device_uuid));
+                if !self.peer_device_uuid.is_empty() {
+                    ui.label(format!(
+                        "Session ready: {}",
+                        self.core.has_peer_session(&self.peer_device_uuid)
+                    ));
+                }
                 ui.label(format!("Session key: {}", self.peer_shared_key_b64));
             });
 
