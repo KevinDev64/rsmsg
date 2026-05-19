@@ -101,3 +101,17 @@ pub enum Endpoint {
     WebSocket,
 }
 ```
+
+```rust
+pub struct RealtimeSession {
+    pub poll_interval_ms: u64,
+    pub pending_batch_limit: i64,
+}
+
+impl RealtimeSession {
+    pub const DEFAULT: Self = Self {
+        poll_interval_ms: 1200,
+        pending_batch_limit: 200,
+    };
+}
+```
