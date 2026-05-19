@@ -1,6 +1,6 @@
-use client_core::{ClientConfig, ClientCore, DeviceAuth, PendingEnvelope};
+use client_core::{ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, PendingEnvelope};
 use eframe::egui;
-use shared::{RegisterDeviceRequest, SendMessageRequest};
+use shared::RegisterDeviceRequest;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
@@ -23,8 +23,10 @@ struct MessengerApp {
     auth: Option<DeviceAuth>,
     status: String,
     to_device_uuid: String,
-    message_text: String,
+    plaintext_message: String,
+    shared_key_b64: String,
     inbox: Vec<PendingEnvelope>,
+    decrypted_inbox: Vec<DecryptedMessage>,
 }
 
 impl MessengerApp {
@@ -32,6 +34,7 @@ impl MessengerApp {
         let runtime = Runtime::new().expect("tokio runtime");
         let core = ClientCore::new(ClientConfig::local_default());
         let _ = core.healthcheck();
+        let shared_key_b64 = core.generate_shared_key_b64();
         Self {
             runtime,
             core,
@@ -42,8 +45,10 @@ impl MessengerApp {
             auth: None,
             status: "Disconnected".to_string(),
             to_device_uuid: String::new(),
-            message_text: String::new(),
+            plaintext_message: String::new(),
+            shared_key_b64,
             inbox: Vec::new(),
+            decrypted_inbox: Vec::new(),
         }
     }
 
@@ -82,16 +87,15 @@ impl MessengerApp {
             self.status = "Invalid recipient uuid".to_string();
             return;
         };
-        let req = SendMessageRequest {
-            message_id: Uuid::new_v4().to_string(),
-            from_device_uuid: auth.device_uuid.clone(),
-            to_device_uuid: self.to_device_uuid.clone(),
-            envelope_b64: self.message_text.clone(),
-        };
-        match self.runtime.block_on(self.core.send_message(&auth, req)) {
+        match self.runtime.block_on(self.core.send_text_message(
+            &auth,
+            self.to_device_uuid.clone(),
+            self.plaintext_message.clone(),
+            &self.shared_key_b64,
+        )) {
             Ok(true) => {
                 self.status = "Message accepted".to_string();
-                self.message_text.clear();
+                self.plaintext_message.clear();
             }
             Ok(false) => self.status = "Duplicate message rejected".to_string(),
             Err(err) => self.status = format!("Send failed: {err}"),
@@ -109,6 +113,9 @@ impl MessengerApp {
         {
             Ok(messages) => {
                 self.status = format!("Fetched {} messages", messages.len());
+                self.decrypted_inbox = self
+                    .core
+                    .decrypt_pending(messages.clone(), &self.shared_key_b64);
                 self.inbox = messages;
             }
             Err(err) => self.status = format!("Fetch failed: {err}"),
@@ -123,6 +130,9 @@ impl MessengerApp {
         match self.runtime.block_on(self.core.ws_drain_once(&auth)) {
             Ok(messages) => {
                 self.status = format!("WS pulled {} messages", messages.len());
+                self.decrypted_inbox = self
+                    .core
+                    .decrypt_pending(messages.clone(), &self.shared_key_b64);
                 self.inbox = messages;
             }
             Err(err) => self.status = format!("WS failed: {err}"),
@@ -170,8 +180,15 @@ impl eframe::App for MessengerApp {
             ui.heading("Chat");
             ui.label("Recipient device uuid");
             ui.text_edit_singleline(&mut self.to_device_uuid);
-            ui.label("Message envelope b64");
-            ui.text_edit_multiline(&mut self.message_text);
+            ui.label("Shared key b64");
+            ui.text_edit_singleline(&mut self.shared_key_b64);
+            ui.horizontal(|ui| {
+                if ui.button("Generate key").clicked() {
+                    self.shared_key_b64 = self.core.generate_shared_key_b64();
+                }
+            });
+            ui.label("Plaintext message");
+            ui.text_edit_multiline(&mut self.plaintext_message);
 
             ui.horizontal(|ui| {
                 if ui.button("Send").clicked() {
@@ -186,7 +203,20 @@ impl eframe::App for MessengerApp {
             });
 
             ui.separator();
-            ui.heading("Inbox");
+            ui.heading("Inbox (decrypted)");
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for msg in &self.decrypted_inbox {
+                    ui.group(|ui| {
+                        ui.label(format!("id: {}", msg.message_id));
+                        ui.label(format!("from: {}", msg.from_device_uuid));
+                        ui.label(format!("ts: {}", msg.created_at_unix_ms));
+                        ui.label(format!("text: {}", msg.plaintext));
+                    });
+                }
+            });
+
+            ui.separator();
+            ui.heading("Inbox (raw envelope)");
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for msg in &self.inbox {
                     ui.group(|ui| {
