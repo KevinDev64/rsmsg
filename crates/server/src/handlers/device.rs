@@ -11,35 +11,32 @@ use shared::{
 use uuid::Uuid;
 
 use crate::{
+    api_error::{ApiError, ApiResult},
     app_state::AppState,
     auth::{authorize_device, hash_token},
+    repository::{auth_tokens, devices, prekeys},
 };
 
 pub async fn register_device(
     State(state): State<AppState>,
     Json(payload): Json<RegisterDeviceRequest>,
-) -> Result<Json<RegisterDeviceResponse>, StatusCode> {
+) -> ApiResult<Json<RegisterDeviceResponse>> {
     let identity_key = STANDARD
         .decode(payload.identity_key_b64)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid identity key"))?;
     let signed_prekey = STANDARD
         .decode(payload.signed_prekey_b64)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid signed prekey"))?;
 
-    let row = sqlx::query_scalar::<_, Uuid>(
-        "INSERT INTO devices (user_id, device_id, identity_key, signed_prekey) \
-         VALUES ($1, $2, $3, $4) \
-         ON CONFLICT (user_id, device_id) \
-         DO UPDATE SET identity_key = EXCLUDED.identity_key, signed_prekey = EXCLUDED.signed_prekey \
-         RETURNING id",
+    let row = devices::upsert_device(
+        &state.db,
+        payload.user_id,
+        payload.device_id,
+        identity_key,
+        signed_prekey,
     )
-    .bind(payload.user_id)
-    .bind(payload.device_id)
-    .bind(identity_key)
-    .bind(signed_prekey)
-    .fetch_one(&state.db)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
 
     Ok(Json(RegisterDeviceResponse {
         device_uuid: row.to_string(),
@@ -50,41 +47,33 @@ pub async fn upload_prekeys(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<UploadPrekeysRequest>,
-) -> Result<Json<UploadPrekeysResponse>, StatusCode> {
+) -> ApiResult<Json<UploadPrekeysResponse>> {
     let auth_device = authorize_device(&state.db, &headers).await?;
-    let device_uuid = Uuid::parse_str(&payload.device_uuid).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let device_uuid = Uuid::parse_str(&payload.device_uuid)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid device uuid"))?;
     if auth_device != device_uuid {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "device mismatch"));
     }
 
     let mut tx = state
         .db
         .begin()
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
 
     let mut inserted = 0_u64;
     for item in payload.prekeys {
         let pubkey = STANDARD
             .decode(item.pubkey_b64)
-            .map_err(|_| StatusCode::BAD_REQUEST)?;
-        let result = sqlx::query(
-            "INSERT INTO one_time_prekeys (device_ref, key_id, pubkey) \
-             VALUES ($1, $2, $3) \
-             ON CONFLICT (device_ref, key_id) DO NOTHING",
-        )
-        .bind(device_uuid)
-        .bind(item.key_id)
-        .bind(pubkey)
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        inserted += result.rows_affected();
+            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid prekey"))?;
+        inserted += prekeys::insert_one_time_prekey(&mut tx, device_uuid, item.key_id, pubkey)
+            .await
+            .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
     }
 
     tx.commit()
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
 
     Ok(Json(UploadPrekeysResponse { inserted }))
 }
@@ -92,29 +81,18 @@ pub async fn upload_prekeys(
 pub async fn device_login(
     State(state): State<AppState>,
     Json(payload): Json<DeviceLoginRequest>,
-) -> Result<Json<DeviceLoginResponse>, StatusCode> {
-    let device_uuid = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM devices WHERE user_id = $1 AND device_id = $2",
-    )
-    .bind(payload.user_id)
-    .bind(payload.device_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .ok_or(StatusCode::NOT_FOUND)?;
+) -> ApiResult<Json<DeviceLoginResponse>> {
+    let device_uuid = devices::find_device_uuid(&state.db, payload.user_id, payload.device_id)
+        .await
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?
+        .ok_or(ApiError::new(StatusCode::NOT_FOUND, "device not found"))?;
 
     let auth_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let token_hash = hash_token(&auth_token);
 
-    sqlx::query(
-        "INSERT INTO device_auth_tokens (device_ref, token_hash, expires_at) \
-         VALUES ($1, $2, NOW() + INTERVAL '30 days')",
-    )
-    .bind(device_uuid)
-    .bind(token_hash)
-    .execute(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    auth_tokens::create_token(&state.db, device_uuid, token_hash)
+        .await
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
 
     Ok(Json(DeviceLoginResponse {
         device_uuid: device_uuid.to_string(),
@@ -126,30 +104,27 @@ pub async fn device_logout(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<DeviceLogoutRequest>,
-) -> Result<Json<DeviceLogoutResponse>, StatusCode> {
+) -> ApiResult<Json<DeviceLogoutResponse>> {
     let auth_device = authorize_device(&state.db, &headers).await?;
-    let device_uuid = Uuid::parse_str(&payload.device_uuid).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let device_uuid = Uuid::parse_str(&payload.device_uuid)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid device uuid"))?;
     if auth_device != device_uuid {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "device mismatch"));
     }
 
     let token = headers
         .get("x-device-token")
         .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+        .ok_or(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "missing device token",
+        ))?;
 
-    let result = sqlx::query(
-        "UPDATE device_auth_tokens \
-         SET revoked_at = NOW() \
-         WHERE device_ref = $1 AND token_hash = $2 AND revoked_at IS NULL",
-    )
-    .bind(device_uuid)
-    .bind(hash_token(token))
-    .execute(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let affected = auth_tokens::revoke_token(&state.db, device_uuid, hash_token(token))
+        .await
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
 
     Ok(Json(DeviceLogoutResponse {
-        revoked: result.rows_affected() == 1,
+        revoked: affected == 1,
     }))
 }

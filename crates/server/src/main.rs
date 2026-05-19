@@ -1,12 +1,5 @@
-mod app_state;
-mod auth;
-mod handlers;
-mod router;
-mod services;
-
 use anyhow::{Context, Result};
-use app_state::AppState;
-use router::build_router;
+use server::{app_state::AppState, router::build_router};
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::main]

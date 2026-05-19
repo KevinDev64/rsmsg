@@ -1,18 +1,19 @@
 use axum::{
     extract::{State, WebSocketUpgrade, ws::Message},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Response,
 };
 
 use crate::{
-    app_state::AppState, auth::authorize_device, services::messages::drain_pending_messages,
+    api_error::ApiResult, app_state::AppState, auth::authorize_device,
+    services::messages::drain_pending_messages,
 };
 
 pub async fn ws_realtime(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Response, StatusCode> {
+) -> ApiResult<Response> {
     let device_uuid = authorize_device(&state.db, &headers).await?;
     Ok(ws.on_upgrade(move |mut socket| async move {
         if let Ok(messages) = drain_pending_messages(&state.db, device_uuid, 200).await {
