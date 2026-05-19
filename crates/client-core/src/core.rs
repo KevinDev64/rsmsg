@@ -4,6 +4,8 @@ use shared::{
     DeviceLoginRequest, FetchPrekeyBundleResponse, RegisterDeviceRequest, SendMessageRequest,
     UploadPrekeysRequest,
 };
+use std::collections::HashMap;
+use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
@@ -14,6 +16,7 @@ use crate::{
 pub struct ClientCore {
     crypto: CryptoEngine,
     transport: ApiTransport,
+    peer_sessions: Mutex<HashMap<String, String>>,
 }
 
 impl ClientCore {
@@ -21,6 +24,7 @@ impl ClientCore {
         Self {
             crypto: CryptoEngine::new(),
             transport: ApiTransport::new(config),
+            peer_sessions: Mutex::new(HashMap::new()),
         }
     }
 
@@ -106,6 +110,25 @@ impl ClientCore {
         self.send_message(auth, req).await
     }
 
+    pub async fn send_text_to_peer(
+        &self,
+        auth: &DeviceAuth,
+        peer_device_uuid: String,
+        plaintext: String,
+    ) -> Result<bool> {
+        let key = self
+            .peer_sessions
+            .lock()
+            .expect("peer_sessions")
+            .get(&peer_device_uuid)
+            .cloned();
+        let Some(key) = key else {
+            return Ok(false);
+        };
+        self.send_text_message(auth, peer_device_uuid, plaintext, &key)
+            .await
+    }
+
     pub async fn fetch_pending(
         &self,
         auth: &DeviceAuth,
@@ -140,6 +163,10 @@ impl ClientCore {
         let key_b64 = self
             .crypto
             .derive_shared_key_b64(&local_keys.identity_private_b64, &peer_pub)?;
+        self.peer_sessions
+            .lock()
+            .expect("peer_sessions")
+            .insert(bundle.device_uuid.clone(), key_b64.clone());
         Ok((key_b64, bundle))
     }
 
@@ -162,5 +189,28 @@ impl ClientCore {
                     })
             })
             .collect()
+    }
+
+    pub fn decrypt_pending_with_sessions(
+        &self,
+        pending: Vec<PendingEnvelope>,
+    ) -> (Vec<DecryptedMessage>, Vec<String>) {
+        let sessions = self.peer_sessions.lock().expect("peer_sessions");
+        let mut out = Vec::new();
+        let mut ack_ids = Vec::new();
+        for item in pending {
+            if let Some(key) = sessions.get(&item.from_device_uuid) {
+                if let Ok(plaintext) = self.crypto.decrypt_text_from_b64(key, &item.envelope_b64) {
+                    ack_ids.push(item.message_id.clone());
+                    out.push(DecryptedMessage {
+                        message_id: item.message_id,
+                        from_device_uuid: item.from_device_uuid,
+                        plaintext,
+                        created_at_unix_ms: item.created_at_unix_ms,
+                    });
+                }
+            }
+        }
+        (out, ack_ids)
     }
 }
