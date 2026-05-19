@@ -1,7 +1,10 @@
+use serde::{Deserialize, Serialize};
+
 #[derive(Clone, Debug)]
 pub struct ClientConfig {
     pub http_base: String,
     pub ws_base: String,
+    pub session_store_path: String,
 }
 
 impl ClientConfig {
@@ -9,6 +12,7 @@ impl ClientConfig {
         Self {
             http_base: "http://127.0.0.1:3000".to_string(),
             ws_base: "ws://127.0.0.1:3000".to_string(),
+            session_store_path: ".rsmsg_peer_sessions.json".to_string(),
         }
     }
 }
@@ -41,4 +45,10 @@ pub struct LocalDeviceKeys {
     pub identity_public_b64: String,
     pub signed_prekey_private_b64: String,
     pub signed_prekey_public_b64: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredPeerSession {
+    pub peer_device_uuid: String,
+    pub shared_key_b64: String,
 }

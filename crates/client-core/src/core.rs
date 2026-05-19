@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
+    session_store,
     transport::ApiTransport,
     types::{ClientConfig, DecryptedMessage, DeviceAuth, LocalDeviceKeys, PendingEnvelope},
 };
@@ -16,15 +17,18 @@ use crate::{
 pub struct ClientCore {
     crypto: CryptoEngine,
     transport: ApiTransport,
+    session_store_path: String,
     peer_sessions: Mutex<HashMap<String, String>>,
 }
 
 impl ClientCore {
     pub fn new(config: ClientConfig) -> Self {
+        let sessions = session_store::load(&config.session_store_path);
         Self {
             crypto: CryptoEngine::new(),
-            transport: ApiTransport::new(config),
-            peer_sessions: Mutex::new(HashMap::new()),
+            transport: ApiTransport::new(config.clone()),
+            session_store_path: config.session_store_path,
+            peer_sessions: Mutex::new(sessions),
         }
     }
 
@@ -129,6 +133,13 @@ impl ClientCore {
             .await
     }
 
+    pub fn has_peer_session(&self, peer_device_uuid: &str) -> bool {
+        self.peer_sessions
+            .lock()
+            .expect("peer_sessions")
+            .contains_key(peer_device_uuid)
+    }
+
     pub async fn fetch_pending(
         &self,
         auth: &DeviceAuth,
@@ -167,6 +178,7 @@ impl ClientCore {
             .lock()
             .expect("peer_sessions")
             .insert(bundle.device_uuid.clone(), key_b64.clone());
+        let _ = self.persist_sessions();
         Ok((key_b64, bundle))
     }
 
@@ -212,5 +224,11 @@ impl ClientCore {
             }
         }
         (out, ack_ids)
+    }
+
+    fn persist_sessions(&self) -> Result<()> {
+        let sessions = self.peer_sessions.lock().expect("peer_sessions");
+        session_store::save(&self.session_store_path, &sessions)?;
+        Ok(())
     }
 }
