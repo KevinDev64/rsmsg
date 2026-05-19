@@ -8,3 +8,8 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 client-core = { path = "../client-core" }
+eframe.workspace = true
+egui.workspace = true
+shared = { path = "../shared" }
+tokio.workspace = true
+uuid.workspace = true
