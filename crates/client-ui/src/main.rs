@@ -1,8 +1,8 @@
-use client_core::{ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, PendingEnvelope};
+use client_core::{
+    ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, LocalDeviceKeys, PendingEnvelope,
+};
 use eframe::egui;
-use shared::RegisterDeviceRequest;
 use tokio::runtime::Runtime;
-use uuid::Uuid;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions::default();
@@ -16,15 +16,16 @@ fn main() -> eframe::Result<()> {
 struct MessengerApp {
     runtime: Runtime,
     core: ClientCore,
+    local_keys: LocalDeviceKeys,
     user_id: String,
     device_id: String,
-    identity_key_b64: String,
-    signed_prekey_b64: String,
     auth: Option<DeviceAuth>,
     status: String,
-    to_device_uuid: String,
+    peer_user_id: String,
+    peer_device_id: String,
+    peer_device_uuid: String,
+    peer_shared_key_b64: String,
     plaintext_message: String,
-    shared_key_b64: String,
     inbox: Vec<PendingEnvelope>,
     decrypted_inbox: Vec<DecryptedMessage>,
 }
@@ -34,31 +35,31 @@ impl MessengerApp {
         let runtime = Runtime::new().expect("tokio runtime");
         let core = ClientCore::new(ClientConfig::local_default());
         let _ = core.healthcheck();
-        let shared_key_b64 = core.generate_shared_key_b64();
+        let local_keys = core.generate_local_device_keys();
         Self {
             runtime,
             core,
+            local_keys,
             user_id: String::new(),
             device_id: String::new(),
-            identity_key_b64: "AQ==".to_string(),
-            signed_prekey_b64: "AQ==".to_string(),
             auth: None,
             status: "Disconnected".to_string(),
-            to_device_uuid: String::new(),
+            peer_user_id: String::new(),
+            peer_device_id: String::new(),
+            peer_device_uuid: String::new(),
+            peer_shared_key_b64: String::new(),
             plaintext_message: String::new(),
-            shared_key_b64,
             inbox: Vec::new(),
             decrypted_inbox: Vec::new(),
         }
     }
 
     fn register_device(&mut self) {
-        let req = RegisterDeviceRequest {
-            user_id: self.user_id.clone(),
-            device_id: self.device_id.clone(),
-            identity_key_b64: self.identity_key_b64.clone(),
-            signed_prekey_b64: self.signed_prekey_b64.clone(),
-        };
+        let req = self.core.build_register_request(
+            self.user_id.clone(),
+            self.device_id.clone(),
+            &self.local_keys,
+        );
         match self.runtime.block_on(self.core.register_device(req)) {
             Ok(uuid) => self.status = format!("Registered device: {uuid}"),
             Err(err) => self.status = format!("Register failed: {err}"),
@@ -78,20 +79,36 @@ impl MessengerApp {
         }
     }
 
+    fn derive_peer_key(&mut self) {
+        match self.runtime.block_on(self.core.derive_peer_shared_key(
+            &self.local_keys,
+            self.peer_user_id.clone(),
+            self.peer_device_id.clone(),
+        )) {
+            Ok((key, bundle)) => {
+                self.peer_shared_key_b64 = key;
+                self.peer_device_uuid = bundle.device_uuid;
+                self.status = "Peer session key derived".to_string();
+            }
+            Err(err) => self.status = format!("Derive key failed: {err}"),
+        }
+    }
+
     fn send_message(&mut self) {
         let Some(auth) = self.auth.clone() else {
             self.status = "Login required".to_string();
             return;
         };
-        let Ok(_) = Uuid::parse_str(&self.to_device_uuid) else {
-            self.status = "Invalid recipient uuid".to_string();
+        if self.peer_device_uuid.is_empty() || self.peer_shared_key_b64.is_empty() {
+            self.status = "Derive peer key first".to_string();
             return;
-        };
+        }
+
         match self.runtime.block_on(self.core.send_text_message(
             &auth,
-            self.to_device_uuid.clone(),
+            self.peer_device_uuid.clone(),
             self.plaintext_message.clone(),
-            &self.shared_key_b64,
+            &self.peer_shared_key_b64,
         )) {
             Ok(true) => {
                 self.status = "Message accepted".to_string();
@@ -115,7 +132,7 @@ impl MessengerApp {
                 self.status = format!("Fetched {} messages", messages.len());
                 self.decrypted_inbox = self
                     .core
-                    .decrypt_pending(messages.clone(), &self.shared_key_b64);
+                    .decrypt_pending(messages.clone(), &self.peer_shared_key_b64);
                 self.inbox = messages;
             }
             Err(err) => self.status = format!("Fetch failed: {err}"),
@@ -132,7 +149,7 @@ impl MessengerApp {
                 self.status = format!("WS pulled {} messages", messages.len());
                 self.decrypted_inbox = self
                     .core
-                    .decrypt_pending(messages.clone(), &self.shared_key_b64);
+                    .decrypt_pending(messages.clone(), &self.peer_shared_key_b64);
                 self.inbox = messages;
             }
             Err(err) => self.status = format!("WS failed: {err}"),
@@ -158,11 +175,6 @@ impl eframe::App for MessengerApp {
                 ui.text_edit_singleline(&mut self.user_id);
                 ui.label("Device ID");
                 ui.text_edit_singleline(&mut self.device_id);
-                ui.label("Identity key b64");
-                ui.text_edit_singleline(&mut self.identity_key_b64);
-                ui.label("Signed prekey b64");
-                ui.text_edit_singleline(&mut self.signed_prekey_b64);
-
                 if ui.button("Register").clicked() {
                     self.register_device();
                 }
@@ -174,19 +186,22 @@ impl eframe::App for MessengerApp {
                     ui.separator();
                     ui.label(format!("Device UUID: {}", auth.device_uuid));
                 }
+
+                ui.separator();
+                ui.heading("Peer Session");
+                ui.label("Peer user id");
+                ui.text_edit_singleline(&mut self.peer_user_id);
+                ui.label("Peer device id");
+                ui.text_edit_singleline(&mut self.peer_device_id);
+                if ui.button("Derive peer key").clicked() {
+                    self.derive_peer_key();
+                }
+                ui.label(format!("Peer device uuid: {}", self.peer_device_uuid));
+                ui.label(format!("Session key: {}", self.peer_shared_key_b64));
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Chat");
-            ui.label("Recipient device uuid");
-            ui.text_edit_singleline(&mut self.to_device_uuid);
-            ui.label("Shared key b64");
-            ui.text_edit_singleline(&mut self.shared_key_b64);
-            ui.horizontal(|ui| {
-                if ui.button("Generate key").clicked() {
-                    self.shared_key_b64 = self.core.generate_shared_key_b64();
-                }
-            });
             ui.label("Plaintext message");
             ui.text_edit_multiline(&mut self.plaintext_message);
 
