@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{State, WebSocketUpgrade, ws::Message},
     http::HeaderMap,
     http::StatusCode,
     routing::{get, post},
@@ -10,9 +10,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use sha2::{Digest, Sha256};
 use shared::{
     AckMessageRequest, AckMessageResponse, DeviceLoginRequest, DeviceLoginResponse,
-    FetchPendingRequest, FetchPendingResponse, FetchPrekeyBundleRequest, FetchPrekeyBundleResponse,
-    PendingMessageItem, PrekeyUploadItem, RegisterDeviceRequest, RegisterDeviceResponse,
-    SendMessageRequest, SendMessageResponse, UploadPrekeysRequest, UploadPrekeysResponse,
+    DeviceLogoutRequest, DeviceLogoutResponse, FetchPendingRequest, FetchPendingResponse,
+    FetchPrekeyBundleRequest, FetchPrekeyBundleResponse, PendingMessageItem, PrekeyUploadItem,
+    RegisterDeviceRequest, RegisterDeviceResponse, SendMessageRequest, SendMessageResponse,
+    UploadPrekeysRequest, UploadPrekeysResponse,
 };
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
@@ -101,9 +102,14 @@ async fn register_device(
 
 async fn upload_prekeys(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<UploadPrekeysRequest>,
 ) -> Result<Json<UploadPrekeysResponse>, StatusCode> {
+    let auth_device = authorize_device(&state.db, &headers).await?;
     let device_uuid = Uuid::parse_str(&payload.device_uuid).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if auth_device != device_uuid {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let mut tx = state
         .db
         .begin()
@@ -167,6 +173,89 @@ async fn device_login(
         device_uuid: device_uuid.to_string(),
         auth_token,
     }))
+}
+
+async fn device_logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<DeviceLogoutRequest>,
+) -> Result<Json<DeviceLogoutResponse>, StatusCode> {
+    let auth_device = authorize_device(&state.db, &headers).await?;
+    let device_uuid = Uuid::parse_str(&payload.device_uuid).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if auth_device != device_uuid {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let token = headers
+        .get("x-device-token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let result = sqlx::query(
+        "UPDATE device_auth_tokens \
+         SET revoked_at = NOW() \
+         WHERE device_ref = $1 AND token_hash = $2 AND revoked_at IS NULL",
+    )
+    .bind(device_uuid)
+    .bind(hash_token(token))
+    .execute(&state.db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(DeviceLogoutResponse {
+        revoked: result.rows_affected() == 1,
+    }))
+}
+
+async fn drain_pending_messages(
+    db: &sqlx::PgPool,
+    to_device: Uuid,
+    limit: i64,
+) -> Result<Vec<PendingMessageItem>, StatusCode> {
+    let mut tx = db
+        .begin()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let rows = sqlx::query_as::<_, (Uuid, String, Uuid, Vec<u8>, i64)>(
+        "SELECT id, message_id, from_device, envelope_bytes, EXTRACT(EPOCH FROM created_at)::BIGINT * 1000 \
+         FROM messages \
+         WHERE to_device = $1 AND delivered_at IS NULL \
+         ORDER BY created_at \
+         LIMIT $2 \
+         FOR UPDATE SKIP LOCKED",
+    )
+    .bind(to_device)
+    .bind(limit)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    for row in &rows {
+        sqlx::query("UPDATE messages SET delivered_at = NOW() WHERE id = $1")
+            .bind(row.0)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(_, message_id, from_device_uuid, envelope_bytes, created_at_unix_ms)| {
+                PendingMessageItem {
+                    message_id,
+                    from_device_uuid: from_device_uuid.to_string(),
+                    envelope_b64: STANDARD.encode(envelope_bytes),
+                    created_at_unix_ms,
+                }
+            },
+        )
+        .collect())
 }
 
 async fn fetch_prekey_bundle(
@@ -272,53 +361,29 @@ async fn fetch_pending(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    let mut tx = state
-        .db
-        .begin()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let rows = sqlx::query_as::<_, (Uuid, String, Uuid, Vec<u8>, i64)>(
-        "SELECT id, message_id, from_device, envelope_bytes, EXTRACT(EPOCH FROM created_at)::BIGINT * 1000 \
-         FROM messages \
-         WHERE to_device = $1 AND delivered_at IS NULL \
-         ORDER BY created_at \
-         LIMIT $2 \
-         FOR UPDATE SKIP LOCKED",
-    )
-    .bind(to_device)
-    .bind(limit)
-    .fetch_all(&mut *tx)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    for row in &rows {
-        sqlx::query("UPDATE messages SET delivered_at = NOW() WHERE id = $1")
-            .bind(row.0)
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-
-    tx.commit()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let messages = rows
-        .into_iter()
-        .map(
-            |(_, message_id, from_device_uuid, envelope_bytes, created_at_unix_ms)| {
-                PendingMessageItem {
-                    message_id,
-                    from_device_uuid: from_device_uuid.to_string(),
-                    envelope_b64: STANDARD.encode(envelope_bytes),
-                    created_at_unix_ms,
-                }
-            },
-        )
-        .collect();
+    let messages = drain_pending_messages(&state.db, to_device, limit).await?;
 
     Ok(Json(FetchPendingResponse { messages }))
+}
+
+async fn ws_realtime(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, StatusCode> {
+    let device_uuid = authorize_device(&state.db, &headers).await?;
+    Ok(ws.on_upgrade(move |mut socket| async move {
+        if let Ok(messages) = drain_pending_messages(&state.db, device_uuid, 200).await {
+            for message in messages {
+                if let Ok(payload) = serde_json::to_string(&message) {
+                    if socket.send(Message::Text(payload.into())).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+        let _ = socket.send(Message::Text("ready".into())).await;
+    }))
 }
 
 async fn ack_message(
@@ -365,8 +430,10 @@ async fn main() -> Result<()> {
     let app_state = AppState { db };
     let app = Router::new()
         .route("/health", get(health))
+        .route("/v1/ws", get(ws_realtime))
         .route("/v1/register_device", post(register_device))
         .route("/v1/device_login", post(device_login))
+        .route("/v1/device_logout", post(device_logout))
         .route("/v1/upload_prekeys", post(upload_prekeys))
         .route("/v1/fetch_prekey_bundle", post(fetch_prekey_bundle))
         .route("/v1/send_message", post(send_message))
