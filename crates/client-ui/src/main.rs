@@ -34,8 +34,12 @@ struct ChatMessage {
 
 #[derive(Default, Serialize, Deserialize)]
 struct ChatHistory {
+    #[serde(default)]
     chats: BTreeMap<String, Vec<ChatMessage>>,
+    #[serde(default)]
     peer_by_device_uuid: BTreeMap<String, String>,
+    #[serde(default)]
+    device_uuid_by_peer: BTreeMap<String, String>,
 }
 
 impl ChatHistory {
@@ -68,7 +72,6 @@ struct MessengerApp {
     peer_nickname_input: String,
     peer_search_results: Vec<String>,
     selected_chat: String,
-    peer_device_uuid: String,
     message_input: String,
     last_sync_at: Instant,
 }
@@ -88,7 +91,6 @@ impl MessengerApp {
             peer_nickname_input: String::new(),
             peer_search_results: Vec::new(),
             selected_chat: String::new(),
-            peer_device_uuid: String::new(),
             message_input: String::new(),
             last_sync_at: Instant::now(),
         }
@@ -189,12 +191,14 @@ impl MessengerApp {
                     self.status = "Peer resolve mismatch, retry".to_string();
                     return;
                 }
-                self.peer_device_uuid = resolved_uuid;
                 self.selected_chat = peer.clone();
                 self.history.chats.entry(peer.clone()).or_default();
                 self.history
                     .peer_by_device_uuid
-                    .insert(self.peer_device_uuid.clone(), peer.clone());
+                    .insert(resolved_uuid.clone(), peer.clone());
+                self.history
+                    .device_uuid_by_peer
+                    .insert(peer.clone(), resolved_uuid);
                 self.history.save();
                 self.status = format!("Chat with @{peer} ready");
             }
@@ -232,6 +236,15 @@ impl MessengerApp {
             self.status = "Select chat first".to_string();
             return;
         }
+        let Some(peer_device_uuid) = self
+            .history
+            .device_uuid_by_peer
+            .get(&self.selected_chat)
+            .cloned()
+        else {
+            self.status = "Peer device is unknown. Re-open chat.".to_string();
+            return;
+        };
         if self.message_input.trim().is_empty() {
             return;
         }
@@ -240,11 +253,10 @@ impl MessengerApp {
             .enable_all()
             .build()
             .expect("runtime");
-        match rt.block_on(self.core.send_text_to_peer(
-            &auth,
-            self.peer_device_uuid.clone(),
-            text.clone(),
-        )) {
+        match rt.block_on(
+            self.core
+                .send_text_to_peer(&auth, peer_device_uuid, text.clone()),
+        ) {
             Ok(true) => {
                 self.history
                     .chats
