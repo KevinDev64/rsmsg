@@ -1277,6 +1277,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64",
+ "sha2",
  "shared",
  "sqlx",
  "tokio",

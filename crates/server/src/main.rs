@@ -2,11 +2,14 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::State,
+    http::HeaderMap,
     http::StatusCode,
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use sha2::{Digest, Sha256};
 use shared::{
+    AckMessageRequest, AckMessageResponse, DeviceLoginRequest, DeviceLoginResponse,
     FetchPendingRequest, FetchPendingResponse, FetchPrekeyBundleRequest, FetchPrekeyBundleResponse,
     PendingMessageItem, PrekeyUploadItem, RegisterDeviceRequest, RegisterDeviceResponse,
     SendMessageRequest, SendMessageResponse, UploadPrekeysRequest, UploadPrekeysResponse,
@@ -17,6 +20,42 @@ use uuid::Uuid;
 #[derive(Clone)]
 struct AppState {
     db: sqlx::PgPool,
+}
+
+fn hash_token(token: &str) -> String {
+    let digest = Sha256::digest(token.as_bytes());
+    format!("{digest:x}")
+}
+
+async fn authorize_device(db: &sqlx::PgPool, headers: &HeaderMap) -> Result<Uuid, StatusCode> {
+    let device_uuid = headers
+        .get("x-device-uuid")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)
+        .and_then(|v| Uuid::parse_str(v).map_err(|_| StatusCode::UNAUTHORIZED))?;
+    let token = headers
+        .get("x-device-token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let token_hash = hash_token(token);
+
+    let found = sqlx::query_scalar::<_, i64>(
+        "SELECT 1 FROM device_auth_tokens \
+         WHERE device_ref = $1 AND token_hash = $2 \
+           AND revoked_at IS NULL AND expires_at > NOW() \
+         LIMIT 1",
+    )
+    .bind(device_uuid)
+    .bind(token_hash)
+    .fetch_optional(db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if found == Some(1) {
+        Ok(device_uuid)
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
 }
 
 async fn health(State(state): State<AppState>) -> StatusCode {
@@ -97,6 +136,39 @@ async fn upload_prekeys(
     Ok(Json(UploadPrekeysResponse { inserted }))
 }
 
+async fn device_login(
+    State(state): State<AppState>,
+    Json(payload): Json<DeviceLoginRequest>,
+) -> Result<Json<DeviceLoginResponse>, StatusCode> {
+    let device_uuid = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM devices WHERE user_id = $1 AND device_id = $2",
+    )
+    .bind(payload.user_id)
+    .bind(payload.device_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::NOT_FOUND)?;
+
+    let auth_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let token_hash = hash_token(&auth_token);
+
+    sqlx::query(
+        "INSERT INTO device_auth_tokens (device_ref, token_hash, expires_at) \
+         VALUES ($1, $2, NOW() + INTERVAL '30 days')",
+    )
+    .bind(device_uuid)
+    .bind(token_hash)
+    .execute(&state.db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(DeviceLoginResponse {
+        device_uuid: device_uuid.to_string(),
+        auth_token,
+    }))
+}
+
 async fn fetch_prekey_bundle(
     State(state): State<AppState>,
     Json(payload): Json<FetchPrekeyBundleRequest>,
@@ -153,8 +225,10 @@ async fn fetch_prekey_bundle(
 
 async fn send_message(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<SendMessageRequest>,
 ) -> Result<Json<SendMessageResponse>, StatusCode> {
+    let auth_device = authorize_device(&state.db, &headers).await?;
     let from_device =
         Uuid::parse_str(&payload.from_device_uuid).map_err(|_| StatusCode::BAD_REQUEST)?;
     let to_device =
@@ -162,6 +236,10 @@ async fn send_message(
     let envelope = STANDARD
         .decode(payload.envelope_b64)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    if auth_device != from_device {
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     let result = sqlx::query(
         "INSERT INTO messages (message_id, from_device, to_device, envelope_bytes) \
@@ -183,10 +261,16 @@ async fn send_message(
 
 async fn fetch_pending(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<FetchPendingRequest>,
 ) -> Result<Json<FetchPendingResponse>, StatusCode> {
+    let auth_device = authorize_device(&state.db, &headers).await?;
     let to_device = Uuid::parse_str(&payload.device_uuid).map_err(|_| StatusCode::BAD_REQUEST)?;
     let limit = payload.limit.unwrap_or(100).clamp(1, 500);
+
+    if auth_device != to_device {
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     let mut tx = state
         .db
@@ -237,6 +321,36 @@ async fn fetch_pending(
     Ok(Json(FetchPendingResponse { messages }))
 }
 
+async fn ack_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AckMessageRequest>,
+) -> Result<Json<AckMessageResponse>, StatusCode> {
+    let auth_device = authorize_device(&state.db, &headers).await?;
+    let device_uuid = Uuid::parse_str(&payload.device_uuid).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if auth_device != device_uuid {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if payload.message_ids.is_empty() {
+        return Ok(Json(AckMessageResponse { acked: 0 }));
+    }
+
+    let result = sqlx::query(
+        "UPDATE messages \
+         SET acked_at = NOW() \
+         WHERE to_device = $1 AND message_id = ANY($2::text[]) AND acked_at IS NULL",
+    )
+    .bind(device_uuid)
+    .bind(payload.message_ids)
+    .execute(&state.db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(AckMessageResponse {
+        acked: result.rows_affected(),
+    }))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
@@ -252,10 +366,12 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/register_device", post(register_device))
+        .route("/v1/device_login", post(device_login))
         .route("/v1/upload_prekeys", post(upload_prekeys))
         .route("/v1/fetch_prekey_bundle", post(fetch_prekey_bundle))
         .route("/v1/send_message", post(send_message))
         .route("/v1/fetch_pending", post(fetch_pending))
+        .route("/v1/ack_message", post(ack_message))
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
