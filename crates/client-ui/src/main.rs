@@ -1,11 +1,17 @@
-use client_core::{
-    ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, LocalDeviceKeys, PendingEnvelope,
-};
+use std::{collections::BTreeMap, fs, path::Path};
+
+use client_core::{ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, LocalDeviceKeys};
 use eframe::egui;
-use tokio::runtime::Runtime;
+use serde::{Deserialize, Serialize};
+
+const DEFAULT_DEVICE_ID: &str = "main";
+const HISTORY_FILE: &str = ".rsmsg_chat_history.json";
 
 fn main() -> eframe::Result<()> {
-    let options = eframe::NativeOptions::default();
+    let options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Glow,
+        ..Default::default()
+    };
     eframe::run_native(
         "rsmsg",
         options,
@@ -13,250 +19,278 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct ChatMessage {
+    outgoing: bool,
+    text: String,
+    ts: i64,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct ChatHistory {
+    chats: BTreeMap<String, Vec<ChatMessage>>,
+}
+
+impl ChatHistory {
+    fn load() -> Self {
+        let path = Path::new(HISTORY_FILE);
+        if !path.exists() {
+            return Self::default();
+        }
+        let Ok(raw) = fs::read_to_string(path) else {
+            return Self::default();
+        };
+        serde_json::from_str(&raw).unwrap_or_default()
+    }
+
+    fn save(&self) {
+        if let Ok(raw) = serde_json::to_string_pretty(self) {
+            let _ = fs::write(HISTORY_FILE, raw);
+        }
+    }
+}
+
 struct MessengerApp {
-    runtime: Runtime,
     core: ClientCore,
     local_keys: LocalDeviceKeys,
-    user_id: String,
-    device_id: String,
+    history: ChatHistory,
+    nickname: String,
     auth: Option<DeviceAuth>,
     status: String,
-    peer_user_id: String,
-    peer_device_id: String,
+    peer_nickname_input: String,
+    selected_chat: String,
     peer_device_uuid: String,
-    peer_shared_key_b64: String,
-    plaintext_message: String,
-    inbox: Vec<PendingEnvelope>,
-    decrypted_inbox: Vec<DecryptedMessage>,
+    message_input: String,
 }
 
 impl MessengerApp {
     fn new() -> Self {
-        let runtime = Runtime::new().expect("tokio runtime");
         let core = ClientCore::new(ClientConfig::local_default());
-        let _ = core.healthcheck();
         let local_keys = core.load_or_create_local_device_keys();
         Self {
-            runtime,
             core,
             local_keys,
-            user_id: String::new(),
-            device_id: String::new(),
+            history: ChatHistory::load(),
+            nickname: String::new(),
             auth: None,
-            status: "Disconnected".to_string(),
-            peer_user_id: String::new(),
-            peer_device_id: String::new(),
+            status: "Not logged in".to_string(),
+            peer_nickname_input: String::new(),
+            selected_chat: String::new(),
             peer_device_uuid: String::new(),
-            peer_shared_key_b64: String::new(),
-            plaintext_message: String::new(),
-            inbox: Vec::new(),
-            decrypted_inbox: Vec::new(),
+            message_input: String::new(),
         }
     }
 
-    fn register_device(&mut self) {
+    fn register_or_login(&mut self) {
+        if self.nickname.trim().is_empty() {
+            self.status = "Enter your nickname".to_string();
+            return;
+        }
         let req = self.core.build_register_request(
-            self.user_id.clone(),
-            self.device_id.clone(),
+            self.nickname.clone(),
+            DEFAULT_DEVICE_ID.to_string(),
             &self.local_keys,
         );
-        match self.runtime.block_on(self.core.register_device(req)) {
-            Ok(uuid) => self.status = format!("Registered device: {uuid}"),
-            Err(err) => self.status = format!("Register failed: {err}"),
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        if let Err(err) = rt.block_on(self.core.register_device(req)) {
+            self.status = format!("Register failed: {err}");
+            return;
         }
-    }
-
-    fn login_device(&mut self) {
-        match self.runtime.block_on(
+        match rt.block_on(
             self.core
-                .login_device(self.user_id.clone(), self.device_id.clone()),
+                .login_device(self.nickname.clone(), DEFAULT_DEVICE_ID.to_string()),
         ) {
             Ok(auth) => {
-                self.status = format!("Logged in: {}", auth.device_uuid);
                 self.auth = Some(auth);
+                self.status = format!("Logged in as {}", self.nickname);
             }
             Err(err) => self.status = format!("Login failed: {err}"),
         }
     }
 
-    fn derive_peer_key(&mut self) {
-        match self.runtime.block_on(self.core.derive_peer_shared_key(
+    fn open_chat(&mut self) {
+        let Some(auth) = self.auth.clone() else {
+            self.status = "Log in first".to_string();
+            return;
+        };
+        if self.peer_nickname_input.trim().is_empty() {
+            self.status = "Enter peer nickname".to_string();
+            return;
+        }
+        let peer = self.peer_nickname_input.trim().to_string();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let derive = rt.block_on(self.core.derive_peer_shared_key(
             &self.local_keys,
-            self.peer_user_id.clone(),
-            self.peer_device_id.clone(),
-        )) {
-            Ok((key, bundle)) => {
-                self.peer_shared_key_b64 = key;
+            peer.clone(),
+            DEFAULT_DEVICE_ID.to_string(),
+        ));
+        match derive {
+            Ok((_key, bundle)) => {
                 self.peer_device_uuid = bundle.device_uuid;
-                self.status = "Peer session key derived".to_string();
+                self.selected_chat = peer.clone();
+                self.history.chats.entry(peer.clone()).or_default();
+                self.status = format!("Chat with @{peer} ready");
             }
-            Err(err) => self.status = format!("Derive key failed: {err}"),
+            Err(err) => {
+                self.status = format!("Open chat failed: {err}");
+                let _ = auth;
+            }
         }
     }
 
-    fn send_message(&mut self) {
+    fn send_current_message(&mut self) {
         let Some(auth) = self.auth.clone() else {
-            self.status = "Login required".to_string();
+            self.status = "Log in first".to_string();
             return;
         };
-        if self.peer_device_uuid.is_empty() {
-            self.status = "Derive peer key first".to_string();
+        if self.selected_chat.is_empty() {
+            self.status = "Select chat first".to_string();
             return;
         }
-
-        match self.runtime.block_on(self.core.send_text_to_peer(
+        if self.message_input.trim().is_empty() {
+            return;
+        }
+        let text = self.message_input.clone();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        match rt.block_on(self.core.send_text_to_peer(
             &auth,
             self.peer_device_uuid.clone(),
-            self.plaintext_message.clone(),
+            text.clone(),
         )) {
             Ok(true) => {
-                self.status = "Message accepted".to_string();
-                self.plaintext_message.clear();
+                self.history
+                    .chats
+                    .entry(self.selected_chat.clone())
+                    .or_default()
+                    .push(ChatMessage {
+                        outgoing: true,
+                        text,
+                        ts: chrono_like_now_ms(),
+                    });
+                self.history.save();
+                self.message_input.clear();
+                self.status = "Sent".to_string();
             }
-            Ok(false) => self.status = "No peer session key; derive first".to_string(),
+            Ok(false) => self.status = "Peer session missing. Re-open chat.".to_string(),
             Err(err) => self.status = format!("Send failed: {err}"),
         }
     }
 
-    fn pull_pending(&mut self) {
+    fn sync_incoming(&mut self) {
         let Some(auth) = self.auth.clone() else {
-            self.status = "Login required".to_string();
             return;
         };
-        match self
-            .runtime
-            .block_on(self.core.fetch_pending(&auth, Some(100)))
-        {
-            Ok(messages) => {
-                let (decrypted, ack_ids) =
-                    self.core.decrypt_pending_with_sessions(messages.clone());
-                if !ack_ids.is_empty() {
-                    let _ = self
-                        .runtime
-                        .block_on(self.core.ack_messages(&auth, ack_ids));
-                }
-                self.status = format!("Fetched {} messages", messages.len());
-                self.decrypted_inbox = decrypted;
-                self.inbox = messages;
-            }
-            Err(err) => self.status = format!("Fetch failed: {err}"),
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let pending = rt.block_on(self.core.fetch_pending(&auth, Some(100)));
+        let Ok(pending) = pending else {
+            return;
+        };
+        let (decrypted, ack_ids) = self.core.decrypt_pending_with_sessions(pending);
+        if !ack_ids.is_empty() {
+            let _ = rt.block_on(self.core.ack_messages(&auth, ack_ids));
         }
+        for msg in decrypted {
+            self.push_incoming(msg);
+        }
+        self.history.save();
     }
 
-    fn ws_drain_once(&mut self) {
-        let Some(auth) = self.auth.clone() else {
-            self.status = "Login required".to_string();
-            return;
-        };
-        match self.runtime.block_on(self.core.ws_drain_once(&auth)) {
-            Ok(messages) => {
-                let (decrypted, ack_ids) =
-                    self.core.decrypt_pending_with_sessions(messages.clone());
-                if !ack_ids.is_empty() {
-                    let _ = self
-                        .runtime
-                        .block_on(self.core.ack_messages(&auth, ack_ids));
-                }
-                self.status = format!("WS pulled {} messages", messages.len());
-                self.decrypted_inbox = decrypted;
-                self.inbox = messages;
-            }
-            Err(err) => self.status = format!("WS failed: {err}"),
-        }
+    fn push_incoming(&mut self, msg: DecryptedMessage) {
+        let chat = self
+            .history
+            .chats
+            .entry(self.selected_chat.clone())
+            .or_default();
+        chat.push(ChatMessage {
+            outgoing: false,
+            text: msg.plaintext,
+            ts: msg.created_at_unix_ms,
+        });
     }
 }
 
 impl eframe::App for MessengerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
+        egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("rsmsg client");
+                ui.heading("rsmsg");
                 ui.separator();
                 ui.label(&self.status);
             });
         });
 
-        egui::SidePanel::left("auth_panel")
-            .resizable(true)
-            .show(ctx, |ui| {
-                ui.heading("Auth");
-                ui.label("User ID");
-                ui.text_edit_singleline(&mut self.user_id);
-                ui.label("Device ID");
-                ui.text_edit_singleline(&mut self.device_id);
-                if ui.button("Register").clicked() {
-                    self.register_device();
-                }
-                if ui.button("Login").clicked() {
-                    self.login_device();
-                }
+        egui::SidePanel::left("left").show(ctx, |ui| {
+            ui.heading("Account");
+            ui.label("Nickname");
+            ui.text_edit_singleline(&mut self.nickname);
+            if ui.button("Register / Login").clicked() {
+                self.register_or_login();
+            }
 
-                if let Some(auth) = &self.auth {
-                    ui.separator();
-                    ui.label(format!("Device UUID: {}", auth.device_uuid));
-                }
+            ui.separator();
+            ui.heading("New chat");
+            ui.label("Peer nickname");
+            ui.text_edit_singleline(&mut self.peer_nickname_input);
+            if ui.button("Open chat").clicked() {
+                self.open_chat();
+            }
 
-                ui.separator();
-                ui.heading("Peer Session");
-                ui.label("Peer user id");
-                ui.text_edit_singleline(&mut self.peer_user_id);
-                ui.label("Peer device id");
-                ui.text_edit_singleline(&mut self.peer_device_id);
-                if ui.button("Derive peer key").clicked() {
-                    self.derive_peer_key();
+            ui.separator();
+            ui.heading("Chats");
+            for nick in self.history.chats.keys() {
+                let selected = self.selected_chat == *nick;
+                if ui.selectable_label(selected, format!("@{nick}")).clicked() {
+                    self.selected_chat = nick.clone();
                 }
-                ui.label(format!("Peer device uuid: {}", self.peer_device_uuid));
-                if !self.peer_device_uuid.is_empty() {
-                    ui.label(format!(
-                        "Session ready: {}",
-                        self.core.has_peer_session(&self.peer_device_uuid)
-                    ));
-                }
-                ui.label(format!("Session key: {}", self.peer_shared_key_b64));
-            });
+            }
+            if ui.button("Sync incoming").clicked() {
+                self.sync_incoming();
+            }
+        });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Chat");
-            ui.label("Plaintext message");
-            ui.text_edit_multiline(&mut self.plaintext_message);
+            if self.selected_chat.is_empty() {
+                ui.heading("Select or create a chat");
+                return;
+            }
 
-            ui.horizontal(|ui| {
-                if ui.button("Send").clicked() {
-                    self.send_message();
-                }
-                if ui.button("Fetch pending").clicked() {
-                    self.pull_pending();
-                }
-                if ui.button("WS drain once").clicked() {
-                    self.ws_drain_once();
+            ui.heading(format!("Chat with @{}", self.selected_chat));
+            ui.separator();
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                if let Some(messages) = self.history.chats.get(&self.selected_chat) {
+                    for m in messages {
+                        let who = if m.outgoing { "You" } else { "Peer" };
+                        ui.label(format!("{who}: {}", m.text));
+                    }
                 }
             });
 
             ui.separator();
-            ui.heading("Inbox (decrypted)");
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for msg in &self.decrypted_inbox {
-                    ui.group(|ui| {
-                        ui.label(format!("id: {}", msg.message_id));
-                        ui.label(format!("from: {}", msg.from_device_uuid));
-                        ui.label(format!("ts: {}", msg.created_at_unix_ms));
-                        ui.label(format!("text: {}", msg.plaintext));
-                    });
-                }
-            });
-
-            ui.separator();
-            ui.heading("Inbox (raw envelope)");
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for msg in &self.inbox {
-                    ui.group(|ui| {
-                        ui.label(format!("id: {}", msg.message_id));
-                        ui.label(format!("from: {}", msg.from_device_uuid));
-                        ui.label(format!("ts: {}", msg.created_at_unix_ms));
-                        ui.label(format!("envelope: {}", msg.envelope_b64));
-                    });
-                }
-            });
+            ui.text_edit_multiline(&mut self.message_input);
+            if ui.button("Send").clicked() {
+                self.send_current_message();
+            }
         });
     }
+}
+
+fn chrono_like_now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let Ok(dur) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return 0;
+    };
+    (dur.as_secs() as i64) * 1000 + (dur.subsec_millis() as i64)
 }
