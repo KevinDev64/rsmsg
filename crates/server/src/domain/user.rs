@@ -1,15 +1,33 @@
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+};
 use axum::http::StatusCode;
-use sha2::{Digest, Sha256};
-use shared::{UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserRegisterResponse};
+use shared::{
+    ResolveUserRequest, ResolveUserResponse, UserLoginRequest, UserLoginResponse,
+    UserRegisterRequest, UserRegisterResponse,
+};
 
 use crate::{
     api_error::{ApiError, ApiResult},
-    repository::users,
+    repository::{devices, users},
 };
 
-fn hash_password(password: &str) -> String {
-    let digest = Sha256::digest(password.as_bytes());
-    format!("{digest:x}")
+fn hash_password(password: &str) -> ApiResult<String> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "hashing failed"))
+}
+
+fn verify_password(password: &str, hash: &str) -> bool {
+    let Ok(parsed) = PasswordHash::new(hash) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok()
 }
 
 pub async fn register(
@@ -22,7 +40,8 @@ pub async fn register(
             "invalid credentials",
         ));
     }
-    let created = users::create_user(db, payload.user_id, hash_password(&payload.password))
+    let password_hash = hash_password(&payload.password)?;
+    let created = users::create_user(db, payload.user_id, password_hash)
         .await
         .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
     Ok(UserRegisterResponse { created })
@@ -38,11 +57,27 @@ pub async fn login(db: &sqlx::PgPool, payload: UserLoginRequest) -> ApiResult<Us
             "invalid credentials",
         ));
     };
-    if stored_hash != hash_password(&payload.password) {
+    if !verify_password(&payload.password, &stored_hash) {
         return Err(ApiError::new(
             StatusCode::UNAUTHORIZED,
             "invalid credentials",
         ));
     }
     Ok(UserLoginResponse { ok: true })
+}
+
+pub async fn resolve_user(
+    db: &sqlx::PgPool,
+    payload: ResolveUserRequest,
+) -> ApiResult<ResolveUserResponse> {
+    let device_uuid = devices::find_device_uuid(db, payload.user_id, payload.device_id)
+        .await
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?
+        .ok_or(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "user device not found",
+        ))?;
+    Ok(ResolveUserResponse {
+        device_uuid: device_uuid.to_string(),
+    })
 }

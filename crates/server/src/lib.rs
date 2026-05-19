@@ -3,6 +3,7 @@ pub mod app_state;
 pub mod auth;
 pub mod domain;
 pub mod handlers;
+pub mod login_rate_limit;
 pub mod repository;
 pub mod router;
 pub mod services;

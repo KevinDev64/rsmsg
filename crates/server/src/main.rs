@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use server::{app_state::AppState, router::build_router};
+use server::{app_state::AppState, login_rate_limit::LoginRateLimiter, router::build_router};
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::main]
@@ -13,7 +13,10 @@ async fn main() -> Result<()> {
         .await
         .context("failed to connect to postgres")?;
 
-    let app_state = AppState { db };
+    let app_state = AppState {
+        db,
+        login_rate_limiter: LoginRateLimiter::new(),
+    };
     let app = build_router(app_state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;

@@ -133,3 +133,14 @@ pub struct UserLoginRequest {
 pub struct UserLoginResponse {
     pub ok: bool,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveUserRequest {
+    pub user_id: String,
+    pub device_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveUserResponse {
+    pub device_uuid: String,
+}
