@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use axum::{extract::State, http::StatusCode, routing::get, Router};
+use axum::{Router, extract::State, http::StatusCode, routing::get};
 use sqlx::postgres::PgPoolOptions;
 
 #[derive(Clone)]
