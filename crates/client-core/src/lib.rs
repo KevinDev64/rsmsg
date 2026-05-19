@@ -1,4 +1,5 @@
 mod core;
+mod key_store;
 mod session_store;
 mod transport;
 mod types;

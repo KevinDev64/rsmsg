@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
-    session_store,
+    key_store, session_store,
     transport::ApiTransport,
     types::{ClientConfig, DecryptedMessage, DeviceAuth, LocalDeviceKeys, PendingEnvelope},
 };
@@ -18,6 +18,7 @@ pub struct ClientCore {
     crypto: CryptoEngine,
     transport: ApiTransport,
     session_store_path: String,
+    key_store_path: String,
     peer_sessions: Mutex<HashMap<String, String>>,
 }
 
@@ -28,6 +29,7 @@ impl ClientCore {
             crypto: CryptoEngine::new(),
             transport: ApiTransport::new(config.clone()),
             session_store_path: config.session_store_path,
+            key_store_path: config.key_store_path,
             peer_sessions: Mutex::new(sessions),
         }
     }
@@ -49,6 +51,15 @@ impl ClientCore {
             signed_prekey_private_b64: signed.private_b64,
             signed_prekey_public_b64: signed.public_b64,
         }
+    }
+
+    pub fn load_or_create_local_device_keys(&self) -> LocalDeviceKeys {
+        if let Some(keys) = key_store::load(&self.key_store_path) {
+            return keys;
+        }
+        let keys = self.generate_local_device_keys();
+        let _ = key_store::save(&self.key_store_path, &keys);
+        keys
     }
 
     pub fn build_register_request(

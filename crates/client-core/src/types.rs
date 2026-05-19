@@ -5,6 +5,7 @@ pub struct ClientConfig {
     pub http_base: String,
     pub ws_base: String,
     pub session_store_path: String,
+    pub key_store_path: String,
 }
 
 impl ClientConfig {
@@ -13,6 +14,7 @@ impl ClientConfig {
             http_base: "http://127.0.0.1:3000".to_string(),
             ws_base: "ws://127.0.0.1:3000".to_string(),
             session_store_path: ".rsmsg_peer_sessions.json".to_string(),
+            key_store_path: ".rsmsg_local_keys.json".to_string(),
         }
     }
 }
@@ -39,7 +41,7 @@ pub struct DecryptedMessage {
     pub created_at_unix_ms: i64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LocalDeviceKeys {
     pub identity_private_b64: String,
     pub identity_public_b64: String,
