@@ -4,9 +4,11 @@ use argon2::{
 };
 use axum::http::StatusCode;
 use shared::{
-    ResolveUserRequest, ResolveUserResponse, UserLoginRequest, UserLoginResponse,
-    UserRegisterRequest, UserRegisterResponse, UserSearchRequest, UserSearchResponse,
+    ResolveDeviceRequest, ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse,
+    UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserRegisterResponse,
+    UserSearchRequest, UserSearchResponse,
 };
+use uuid::Uuid;
 
 use crate::{
     api_error::{ApiError, ApiResult},
@@ -80,6 +82,19 @@ pub async fn resolve_user(
     Ok(ResolveUserResponse {
         device_uuid: device_uuid.to_string(),
     })
+}
+
+pub async fn resolve_device(
+    db: &sqlx::PgPool,
+    payload: ResolveDeviceRequest,
+) -> ApiResult<ResolveDeviceResponse> {
+    let device_uuid = Uuid::parse_str(&payload.device_uuid)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid device uuid"))?;
+    let user_id = devices::find_user_id_by_device_uuid(db, device_uuid)
+        .await
+        .map_err(|err| ApiError::database("resolve_device user lookup failed", err))?
+        .ok_or(ApiError::new(StatusCode::NOT_FOUND, "device not found"))?;
+    Ok(ResolveDeviceResponse { user_id })
 }
 
 pub async fn search_users(

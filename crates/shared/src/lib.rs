@@ -146,6 +146,16 @@ pub struct ResolveUserResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveDeviceRequest {
+    pub device_uuid: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveDeviceResponse {
+    pub user_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserSearchRequest {
     pub query: String,
 }

@@ -55,3 +55,13 @@ pub async fn device_exists(db: &sqlx::PgPool, device_uuid: Uuid) -> Result<bool,
         .await?;
     Ok(found == Some(1))
 }
+
+pub async fn find_user_id_by_device_uuid(
+    db: &sqlx::PgPool,
+    device_uuid: Uuid,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, String>("SELECT user_id FROM devices WHERE id = $1")
+        .bind(device_uuid)
+        .fetch_optional(db)
+        .await
+}

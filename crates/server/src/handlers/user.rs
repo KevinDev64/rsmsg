@@ -1,8 +1,9 @@
 use axum::http::StatusCode;
 use axum::{Json, extract::State};
 use shared::{
-    ResolveUserRequest, ResolveUserResponse, UserLoginRequest, UserLoginResponse,
-    UserRegisterRequest, UserRegisterResponse, UserSearchRequest, UserSearchResponse,
+    ResolveDeviceRequest, ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse,
+    UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserRegisterResponse,
+    UserSearchRequest, UserSearchResponse,
 };
 
 use crate::{
@@ -45,6 +46,13 @@ pub async fn resolve_user(
     Json(payload): Json<ResolveUserRequest>,
 ) -> ApiResult<Json<ResolveUserResponse>> {
     Ok(Json(user::resolve_user(&state.db, payload).await?))
+}
+
+pub async fn resolve_device(
+    State(state): State<AppState>,
+    Json(payload): Json<ResolveDeviceRequest>,
+) -> ApiResult<Json<ResolveDeviceResponse>> {
+    Ok(Json(user::resolve_device(&state.db, payload).await?))
 }
 
 pub async fn user_search(
