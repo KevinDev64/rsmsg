@@ -49,7 +49,7 @@ pub async fn find_device_bundle(
 }
 
 pub async fn device_exists(db: &sqlx::PgPool, device_uuid: Uuid) -> Result<bool, sqlx::Error> {
-    let found = sqlx::query_scalar::<_, i64>("SELECT 1 FROM devices WHERE id = $1 LIMIT 1")
+    let found = sqlx::query_scalar::<_, i32>("SELECT 1 FROM devices WHERE id = $1 LIMIT 1")
         .bind(device_uuid)
         .fetch_optional(db)
         .await?;

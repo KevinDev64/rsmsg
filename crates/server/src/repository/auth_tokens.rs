@@ -5,7 +5,7 @@ pub async fn is_token_active(
     device_uuid: Uuid,
     token_hash: String,
 ) -> Result<bool, sqlx::Error> {
-    let found = sqlx::query_scalar::<_, i64>(
+    let found = sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM device_auth_tokens \
          WHERE device_ref = $1 AND token_hash = $2 \
            AND revoked_at IS NULL AND expires_at > NOW() \
