@@ -4,6 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::json;
+use std::fmt::Display;
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
@@ -15,6 +16,11 @@ pub struct ApiError {
 impl ApiError {
     pub fn new(status: StatusCode, message: &'static str) -> Self {
         Self { status, message }
+    }
+
+    pub fn database(context: &'static str, error: impl Display) -> Self {
+        tracing::error!(%error, context, "database operation failed");
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, "database error")
     }
 }
 

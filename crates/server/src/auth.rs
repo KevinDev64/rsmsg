@@ -36,12 +36,7 @@ pub async fn authorize_device(db: &sqlx::PgPool, headers: &HeaderMap) -> ApiResu
 
     let active = auth_tokens::is_token_active(db, device_uuid, token_hash)
         .await
-        .map_err(|_| {
-            ApiError::new(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "database error",
-            )
-        })?;
+        .map_err(|err| ApiError::database("authorize_device token lookup failed", err))?;
 
     if active {
         Ok(device_uuid)

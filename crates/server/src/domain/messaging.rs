@@ -20,17 +20,17 @@ pub async fn fetch_prekey_bundle(
     let mut tx = db
         .begin()
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|err| ApiError::database("fetch_prekey_bundle begin failed", err))?;
     let device = devices::find_device_bundle(db, payload.user_id, payload.device_id)
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?
+        .map_err(|err| ApiError::database("fetch_prekey_bundle device lookup failed", err))?
         .ok_or(ApiError::new(StatusCode::NOT_FOUND, "device not found"))?;
     let one_time = prekeys::consume_one_time_prekey(&mut tx, device.0)
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|err| ApiError::database("fetch_prekey_bundle consume prekey failed", err))?;
     tx.commit()
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|err| ApiError::database("fetch_prekey_bundle commit failed", err))?;
 
     Ok(FetchPrekeyBundleResponse {
         device_uuid: device.0.to_string(),
@@ -62,7 +62,7 @@ pub async fn send_message(
 
     let recipient_exists = devices::device_exists(db, to_device).await.map_err(|err| {
         tracing::error!(error = %err, %to_device, "send_message recipient lookup failed");
-        ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        ApiError::database("send_message recipient lookup failed", err)
     })?;
     if !recipient_exists {
         tracing::warn!(%from_device, %to_device, "send_message rejected: recipient device not found");
@@ -76,7 +76,7 @@ pub async fn send_message(
         .await
         .map_err(|err| {
             tracing::error!(error = %err, %from_device, %to_device, "send_message insert failed");
-            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+            ApiError::database("send_message insert failed", err)
         })?;
     Ok(SendMessageResponse {
         accepted: rows == 1,
@@ -113,6 +113,6 @@ pub async fn ack_message(
     }
     let acked = messages::ack_messages(db, device_uuid, payload.message_ids)
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|err| ApiError::database("ack_message update failed", err))?;
     Ok(AckMessageResponse { acked })
 }

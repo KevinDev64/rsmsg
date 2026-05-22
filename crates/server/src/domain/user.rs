@@ -43,14 +43,14 @@ pub async fn register(
     let password_hash = hash_password(&payload.password)?;
     let created = users::create_user(db, payload.user_id, password_hash)
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|err| ApiError::database("user_register create failed", err))?;
     Ok(UserRegisterResponse { created })
 }
 
 pub async fn login(db: &sqlx::PgPool, payload: UserLoginRequest) -> ApiResult<UserLoginResponse> {
     let stored = users::get_password_hash(db, payload.user_id)
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|err| ApiError::database("user_login password lookup failed", err))?;
     let Some(stored_hash) = stored else {
         return Err(ApiError::new(
             StatusCode::UNAUTHORIZED,
@@ -72,7 +72,7 @@ pub async fn resolve_user(
 ) -> ApiResult<ResolveUserResponse> {
     let device_uuid = devices::find_device_uuid(db, payload.user_id, payload.device_id)
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?
+        .map_err(|err| ApiError::database("resolve_user device lookup failed", err))?
         .ok_or(ApiError::new(
             StatusCode::NOT_FOUND,
             "user device not found",
@@ -91,6 +91,6 @@ pub async fn search_users(
     }
     let users = users::search_users(db, payload.query)
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|err| ApiError::database("user_search query failed", err))?;
     Ok(UserSearchResponse { users })
 }

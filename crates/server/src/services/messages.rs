@@ -12,39 +12,24 @@ pub async fn drain_pending_messages(
     to_device: Uuid,
     limit: i64,
 ) -> ApiResult<Vec<PendingMessageItem>> {
-    let mut tx = db.begin().await.map_err(|_| {
-        ApiError::new(
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "database error",
-        )
-    })?;
+    let mut tx = db
+        .begin()
+        .await
+        .map_err(|err| ApiError::database("fetch_pending begin failed", err))?;
 
     let rows = messages::fetch_pending_locked(&mut tx, to_device, limit)
         .await
-        .map_err(|_| {
-            ApiError::new(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "database error",
-            )
-        })?;
+        .map_err(|err| ApiError::database("fetch_pending select failed", err))?;
 
     for row in &rows {
         messages::mark_delivered(&mut tx, row.0)
             .await
-            .map_err(|_| {
-                ApiError::new(
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    "database error",
-                )
-            })?;
+            .map_err(|err| ApiError::database("fetch_pending mark delivered failed", err))?;
     }
 
-    tx.commit().await.map_err(|_| {
-        ApiError::new(
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "database error",
-        )
-    })?;
+    tx.commit()
+        .await
+        .map_err(|err| ApiError::database("fetch_pending commit failed", err))?;
 
     Ok(rows
         .into_iter()

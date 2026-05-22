@@ -31,7 +31,7 @@ pub async fn register_device(
         signed_prekey,
     )
     .await
-    .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    .map_err(|err| ApiError::database("register_device upsert failed", err))?;
 
     Ok(RegisterDeviceResponse {
         device_uuid: device_uuid.to_string(),
@@ -52,7 +52,7 @@ pub async fn upload_prekeys(
     let mut tx = db
         .begin()
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|err| ApiError::database("upload_prekeys begin failed", err))?;
     let mut inserted = 0_u64;
     for item in payload.prekeys {
         let pubkey = STANDARD
@@ -60,11 +60,11 @@ pub async fn upload_prekeys(
             .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid prekey"))?;
         inserted += prekeys::insert_one_time_prekey(&mut tx, device_uuid, item.key_id, pubkey)
             .await
-            .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+            .map_err(|err| ApiError::database("upload_prekeys insert failed", err))?;
     }
     tx.commit()
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|err| ApiError::database("upload_prekeys commit failed", err))?;
 
     Ok(UploadPrekeysResponse { inserted })
 }
@@ -75,13 +75,13 @@ pub async fn device_login(
 ) -> ApiResult<DeviceLoginResponse> {
     let device_uuid = devices::find_device_uuid(db, payload.user_id, payload.device_id)
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?
+        .map_err(|err| ApiError::database("device_login device lookup failed", err))?
         .ok_or(ApiError::new(StatusCode::NOT_FOUND, "device not found"))?;
 
     let auth_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     auth_tokens::create_token(db, device_uuid, hash_token(&auth_token))
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|err| ApiError::database("device_login token create failed", err))?;
 
     Ok(DeviceLoginResponse {
         device_uuid: device_uuid.to_string(),
@@ -103,7 +103,7 @@ pub async fn device_logout(
 
     let affected = auth_tokens::revoke_token(db, parsed, hash_token(token))
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|err| ApiError::database("device_logout token revoke failed", err))?;
     Ok(DeviceLogoutResponse {
         revoked: affected == 1,
     })
