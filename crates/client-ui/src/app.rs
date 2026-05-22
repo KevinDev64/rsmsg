@@ -290,10 +290,13 @@ impl MessengerApp {
         self.history
             .device_uuid_by_peer
             .insert(success.peer.clone(), success.resolved_uuid);
-        if let Some(auth) = self.auth.clone() {
-            self.mark_selected_chat_read(auth);
+        let read_changed = self
+            .auth
+            .clone()
+            .is_some_and(|auth| self.mark_selected_chat_read(auth));
+        if read_changed {
+            self.save_history();
         }
-        self.save_history();
         self.status = format!("Chat with @{} ready", success.peer);
     }
 
@@ -649,38 +652,51 @@ impl MessengerApp {
     }
 
     fn apply_sync_success(&mut self, success: SyncSuccess) {
+        let mut changed = false;
         for mapping in success.peer_mappings {
             if !self.verify_or_pin_peer_identity(&mapping.peer, &mapping.bundle) {
                 continue;
             }
-            self.history
+            changed |= self
+                .history
                 .peer_by_device_uuid
-                .insert(mapping.device_uuid.clone(), mapping.peer.clone());
-            self.history
+                .insert(mapping.device_uuid.clone(), mapping.peer.clone())
+                .as_ref()
+                != Some(&mapping.peer);
+            changed |= self
+                .history
                 .device_uuid_by_peer
-                .insert(mapping.peer.clone(), mapping.bundle.device_uuid);
-            self.history.chats.entry(mapping.peer).or_default();
+                .insert(mapping.peer.clone(), mapping.bundle.device_uuid.clone())
+                .as_ref()
+                != Some(&mapping.bundle.device_uuid);
+            if !self.history.chats.contains_key(&mapping.peer) {
+                self.history.chats.entry(mapping.peer).or_default();
+                changed = true;
+            }
         }
         for msg in success.decrypted {
             self.push_incoming(msg);
+            changed = true;
         }
-        self.apply_outgoing_statuses(success.statuses);
+        changed |= self.apply_outgoing_statuses(success.statuses);
         if let Some(auth) = self.auth.clone() {
-            self.mark_selected_chat_read(auth);
+            changed |= self.mark_selected_chat_read(auth);
         }
-        self.save_history();
+        if changed {
+            self.save_history();
+        }
     }
 
-    fn mark_selected_chat_read(&mut self, auth: DeviceAuth) {
+    fn mark_selected_chat_read(&mut self, auth: DeviceAuth) -> bool {
         if self.read_ack_rx.is_some() {
-            return;
+            return false;
         }
         if self.selected_chat.is_empty() {
-            return;
+            return false;
         }
         let chat_name = self.selected_chat.clone();
         let Some(messages) = self.history.chats.get_mut(&self.selected_chat) else {
-            return;
+            return false;
         };
         let message_ids: Vec<String> = messages
             .iter()
@@ -689,7 +705,7 @@ impl MessengerApp {
             .collect();
         if message_ids.is_empty() {
             self.history.unread_by_peer.remove(&self.selected_chat);
-            return;
+            return false;
         }
         for message in messages {
             if !message.outgoing {
@@ -712,6 +728,7 @@ impl MessengerApp {
                 result,
             });
         });
+        true
     }
 
     fn poll_read_ack_result(&mut self) {
@@ -754,7 +771,8 @@ impl MessengerApp {
             .collect()
     }
 
-    fn apply_outgoing_statuses(&mut self, statuses: Vec<OutgoingMessageStatus>) {
+    fn apply_outgoing_statuses(&mut self, statuses: Vec<OutgoingMessageStatus>) -> bool {
+        let mut changed = false;
         for status in statuses {
             let next = if status.read {
                 MessageStatus::Read
@@ -766,11 +784,15 @@ impl MessengerApp {
             for messages in self.history.chats.values_mut() {
                 for message in messages {
                     if message.message_id.as_deref() == Some(status.message_id.as_str()) {
-                        message.status = next;
+                        if message.status != next {
+                            message.status = next;
+                            changed = true;
+                        }
                     }
                 }
             }
         }
+        changed
     }
 
     fn verify_or_pin_peer_identity(
@@ -1048,11 +1070,12 @@ impl eframe::App for MessengerApp {
                         self.selected_chat.clear();
                     } else {
                         self.selected_chat = nick.clone();
-                        if let Some(auth) = self.auth.clone() {
-                            self.mark_selected_chat_read(auth);
+                        if let Some(auth) = self.auth.clone()
+                            && self.mark_selected_chat_read(auth)
+                        {
+                            self.save_history();
                         }
                     }
-                    self.save_history();
                 }
             }
             if ui.button("Sync incoming").clicked() {
