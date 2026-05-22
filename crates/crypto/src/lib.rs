@@ -10,6 +10,7 @@ use rand::{RngCore, rngs::OsRng};
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 
+#[derive(Clone, Copy)]
 pub struct CryptoEngine;
 
 pub struct X25519KeyPair {

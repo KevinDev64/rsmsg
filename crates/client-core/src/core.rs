@@ -4,8 +4,10 @@ use shared::{
     DeviceLoginRequest, FetchPrekeyBundleResponse, RegisterDeviceRequest, SendMessageRequest,
     UploadPrekeysRequest, UserLoginRequest, UserRegisterRequest,
 };
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 use uuid::Uuid;
 
 use crate::{
@@ -17,13 +19,14 @@ use crate::{
     },
 };
 
+#[derive(Clone)]
 pub struct ClientCore {
     crypto: CryptoEngine,
     transport: ApiTransport,
     session_store_path: String,
     key_store_path: String,
-    local_password: Mutex<Option<String>>,
-    peer_sessions: Mutex<HashMap<String, String>>,
+    local_password: Arc<Mutex<Option<String>>>,
+    peer_sessions: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl ClientCore {
@@ -33,8 +36,8 @@ impl ClientCore {
             transport: ApiTransport::new(config.clone()),
             session_store_path: config.session_store_path,
             key_store_path: config.key_store_path,
-            local_password: Mutex::new(None),
-            peer_sessions: Mutex::new(HashMap::new()),
+            local_password: Arc::new(Mutex::new(None)),
+            peer_sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

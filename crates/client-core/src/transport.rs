@@ -16,6 +16,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use crate::types::{ClientConfig, DeviceAuth, PendingEnvelope};
 
+#[derive(Clone)]
 pub struct ApiTransport {
     client: reqwest::Client,
     cfg: ClientConfig,
