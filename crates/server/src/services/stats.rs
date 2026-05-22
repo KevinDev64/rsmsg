@@ -23,6 +23,10 @@ async fn log_stats(db: &sqlx::PgPool) {
             messages_read_total = stats.messages_read_total,
             messages_pending_total = stats.messages_pending_total,
             messages_sent_last_10m = stats.messages_sent_last_10m,
+            blobs_total = stats.blobs_total,
+            blobs_bytes_total = stats.blobs_bytes_total,
+            blobs_created_last_10m = stats.blobs_created_last_10m,
+            blobs_bytes_last_10m = stats.blobs_bytes_last_10m,
             "server aggregate stats"
         ),
         Err(error) => tracing::warn!(%error, "failed to collect server aggregate stats"),
