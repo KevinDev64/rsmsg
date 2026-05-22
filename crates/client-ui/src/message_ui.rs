@@ -33,13 +33,13 @@ pub fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &st
     if message.outgoing {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
             frame.show(ui, |ui| {
-                render_bubble_content(ui, &meta, &display_text, text_color, bubble_width)
+                render_bubble_content(ui, message, &meta, &display_text, text_color, bubble_width)
             });
         });
     } else {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
             frame.show(ui, |ui| {
-                render_bubble_content(ui, &meta, &display_text, text_color, bubble_width)
+                render_bubble_content(ui, message, &meta, &display_text, text_color, bubble_width)
             });
         });
     }
@@ -48,6 +48,7 @@ pub fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &st
 
 fn render_bubble_content(
     ui: &mut egui::Ui,
+    message: &ChatMessage,
     meta: &str,
     text: &str,
     text_color: egui::Color32,
@@ -56,6 +57,36 @@ fn render_bubble_content(
     ui.set_width(width);
     ui.add(egui::Label::new(egui::RichText::new(meta).small().color(text_color)).wrap());
     ui.add(egui::Label::new(egui::RichText::new(text).color(text_color)).wrap());
+    if let (Some(file_name), Some(file_size), Some(data_b64)) = (
+        &message.file_name,
+        message.file_size,
+        &message.file_data_b64,
+    ) {
+        ui.label(
+            egui::RichText::new(format_file_size(file_size))
+                .small()
+                .color(text_color),
+        );
+        if ui.button("Save").clicked() {
+            if let Some(path) = rfd::FileDialog::new().set_file_name(file_name).save_file() {
+                if let Ok(data) =
+                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_b64)
+                {
+                    let _ = std::fs::write(path, data);
+                }
+            }
+        }
+    }
+}
+
+fn format_file_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
 }
 
 fn estimate_bubble_width(text: &str, meta: &str, max_width: f32) -> f32 {

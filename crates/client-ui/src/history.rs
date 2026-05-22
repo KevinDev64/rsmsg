@@ -12,6 +12,12 @@ pub struct ChatMessage {
     pub status: MessageStatus,
     #[serde(default)]
     pub message_id: Option<String>,
+    #[serde(default)]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub file_size: Option<u64>,
+    #[serde(default)]
+    pub file_data_b64: Option<String>,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

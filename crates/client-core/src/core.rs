@@ -15,8 +15,8 @@ use crate::{
     key_store, session_store,
     transport::ApiTransport,
     types::{
-        ClientConfig, DecryptedMessage, DeviceAuth, LocalDeviceKeys, OutgoingMessageStatus,
-        PeerSession, PendingEnvelope,
+        ClientConfig, DecryptedMessage, DeviceAuth, EncryptedMessagePayload, LocalDeviceKeys,
+        OutgoingMessageStatus, PeerSession, PendingEnvelope,
     },
 };
 
@@ -271,6 +271,25 @@ impl ClientCore {
         let sent = self.send_message(auth, req).await;
         let _ = self.persist_sessions();
         sent
+    }
+
+    pub async fn send_file_to_peer_with_id(
+        &self,
+        auth: &DeviceAuth,
+        peer_device_uuid: String,
+        file_name: String,
+        data: Vec<u8>,
+        message_id: String,
+    ) -> Result<bool> {
+        let payload = EncryptedMessagePayload::File {
+            v: 1,
+            file_name,
+            file_size: data.len() as u64,
+            data_b64: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
+        };
+        let plaintext = serde_json::to_string(&payload)?;
+        self.send_text_to_peer_with_id(auth, peer_device_uuid, plaintext, message_id)
+            .await
     }
 
     pub fn has_peer_session(&self, peer_device_uuid: &str) -> bool {

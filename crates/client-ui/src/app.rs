@@ -6,7 +6,8 @@ use std::{
 };
 
 use client_core::{
-    ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, LocalDeviceKeys, OutgoingMessageStatus,
+    ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, EncryptedMessagePayload,
+    LocalDeviceKeys, OutgoingMessageStatus,
 };
 use eframe::egui;
 use sha2::{Digest, Sha256};
@@ -19,6 +20,7 @@ use crate::{
 };
 
 const DEFAULT_DEVICE_ID: &str = "main";
+const MAX_FILE_BYTES: usize = 10 * 1024 * 1024;
 
 pub struct MessengerApp {
     core: ClientCore,
@@ -68,6 +70,11 @@ struct SendResult {
     chat_name: String,
     message_index: usize,
     result: Result<(), String>,
+}
+
+enum SendContent {
+    Text(String),
+    File { file_name: String, data: Vec<u8> },
 }
 
 struct SyncResult {
@@ -292,6 +299,9 @@ impl MessengerApp {
                 ts: now_ms(),
                 status: MessageStatus::Sending,
                 message_id: Some(message_id.clone()),
+                file_name: None,
+                file_size: None,
+                file_data_b64: None,
             });
             chat.len() - 1
         };
@@ -302,7 +312,84 @@ impl MessengerApp {
         let core = self.core.clone();
         let send_chat_name = chat_name.clone();
         thread::spawn(move || {
-            let result = run_send_flow(core, auth, peer_device_uuid, text, message_id);
+            let result = run_send_flow(
+                core,
+                auth,
+                peer_device_uuid,
+                SendContent::Text(text),
+                message_id,
+            );
+            let _ = tx.send(SendResult {
+                chat_name: send_chat_name,
+                message_index,
+                result,
+            });
+        });
+    }
+
+    fn send_file(&mut self) {
+        if self.send_rx.is_some() {
+            return;
+        }
+        let Some(auth) = self.auth.clone() else {
+            self.status = "Log in first".to_string();
+            return;
+        };
+        if self.selected_chat.is_empty() {
+            self.status = "Select chat first".to_string();
+            return;
+        }
+        let Some(peer_device_uuid) = self.ensure_selected_chat_session() else {
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new().pick_file() else {
+            return;
+        };
+        let Ok(data) = std::fs::read(&path) else {
+            self.status = "Could not read selected file".to_string();
+            return;
+        };
+        if data.len() > MAX_FILE_BYTES {
+            self.status = "File is too large. Limit is 10 MB".to_string();
+            return;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("file")
+            .to_string();
+        let chat_name = self.selected_chat.clone();
+        let message_id = Uuid::new_v4().to_string();
+        let message_index = {
+            let chat = self.history.chats.entry(chat_name.clone()).or_default();
+            chat.push(ChatMessage {
+                outgoing: true,
+                text: format!("File: {file_name}"),
+                ts: now_ms(),
+                status: MessageStatus::Sending,
+                message_id: Some(message_id.clone()),
+                file_name: Some(file_name.clone()),
+                file_size: Some(data.len() as u64),
+                file_data_b64: Some(base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &data,
+                )),
+            });
+            chat.len() - 1
+        };
+        self.save_history();
+        let (tx, rx) = mpsc::channel();
+        self.send_rx = Some(rx);
+        let core = self.core.clone();
+        let send_chat_name = chat_name.clone();
+        thread::spawn(move || {
+            let result = run_send_flow(
+                core,
+                auth,
+                peer_device_uuid,
+                SendContent::File { file_name, data },
+                message_id,
+            );
             let _ = tx.send(SendResult {
                 chat_name: send_chat_name,
                 message_index,
@@ -599,6 +686,21 @@ impl MessengerApp {
     }
 
     fn push_incoming(&mut self, msg: DecryptedMessage) {
+        let payload = serde_json::from_str::<EncryptedMessagePayload>(&msg.plaintext).ok();
+        let (text, file_name, file_size, file_data_b64) = match payload {
+            Some(EncryptedMessagePayload::File {
+                file_name,
+                file_size,
+                data_b64,
+                ..
+            }) => (
+                format!("File: {file_name}"),
+                Some(file_name),
+                Some(file_size),
+                Some(data_b64),
+            ),
+            None => (msg.plaintext, None, None, None),
+        };
         let nick = self
             .history
             .peer_by_device_uuid
@@ -613,10 +715,13 @@ impl MessengerApp {
         let chat = self.history.chats.entry(nick.clone()).or_default();
         chat.push(ChatMessage {
             outgoing: false,
-            text: msg.plaintext,
+            text,
             ts: msg.created_at_unix_ms,
             status: MessageStatus::Delivered,
             message_id: Some(msg.message_id),
+            file_name,
+            file_size,
+            file_data_b64,
         });
         if self.selected_chat != nick {
             *self.history.unread_by_peer.entry(nick).or_default() += 1;
@@ -796,6 +901,12 @@ impl eframe::App for MessengerApp {
                 {
                     self.send_current_message();
                 }
+                if ui
+                    .add_enabled(self.send_rx.is_none(), egui::Button::new("Attach file"))
+                    .clicked()
+                {
+                    self.send_file();
+                }
             });
         });
     }
@@ -918,11 +1029,23 @@ fn run_send_flow(
     core: ClientCore,
     auth: DeviceAuth,
     peer_device_uuid: String,
-    text: String,
+    content: SendContent,
     message_id: String,
 ) -> Result<(), String> {
     let rt = runtime();
-    match rt.block_on(core.send_text_to_peer_with_id(&auth, peer_device_uuid, text, message_id)) {
+    let sent = match content {
+        SendContent::Text(text) => {
+            rt.block_on(core.send_text_to_peer_with_id(&auth, peer_device_uuid, text, message_id))
+        }
+        SendContent::File { file_name, data } => rt.block_on(core.send_file_to_peer_with_id(
+            &auth,
+            peer_device_uuid,
+            file_name,
+            data,
+            message_id,
+        )),
+    };
+    match sent {
         Ok(true) => Ok(()),
         Ok(false) => Err("Peer session missing. Re-open chat.".to_string()),
         Err(err) => Err(format!("Send failed: {err}")),

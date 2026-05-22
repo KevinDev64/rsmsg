@@ -68,6 +68,18 @@ pub struct OutgoingMessageStatus {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum EncryptedMessagePayload {
+    #[serde(rename = "file")]
+    File {
+        v: u8,
+        file_name: String,
+        file_size: u64,
+        data_b64: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LocalDeviceKeys {
     pub identity_private_b64: String,
     pub identity_public_b64: String,
