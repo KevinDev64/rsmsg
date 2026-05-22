@@ -140,6 +140,21 @@ impl CryptoEngine {
             .map_err(|_| anyhow!("decryption failed"))?;
         Ok(String::from_utf8(plaintext).map_err(|_| anyhow!("invalid utf8 payload"))?)
     }
+
+    pub fn ratchet_step_b64(&self, chain_key_b64: &str) -> Result<(String, String)> {
+        let chain_key = decode_key(chain_key_b64)?;
+        let hk = Hkdf::<Sha256>::new(None, &chain_key);
+        let mut message_key = [0_u8; 32];
+        let mut next_chain_key = [0_u8; 32];
+        hk.expand(b"rsmsg-message-key-v1", &mut message_key)
+            .map_err(|_| anyhow!("hkdf expand failed"))?;
+        hk.expand(b"rsmsg-chain-key-v1", &mut next_chain_key)
+            .map_err(|_| anyhow!("hkdf expand failed"))?;
+        Ok((
+            STANDARD.encode(message_key),
+            STANDARD.encode(next_chain_key),
+        ))
+    }
 }
 
 fn prekey_signature_payload(prekey_public: &[u8]) -> Vec<u8> {

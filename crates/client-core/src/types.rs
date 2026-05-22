@@ -83,4 +83,21 @@ pub struct LocalDeviceKeys {
 pub struct StoredPeerSession {
     pub peer_device_uuid: String,
     pub shared_key_b64: String,
+    #[serde(default)]
+    pub send_chain_key_b64: Option<String>,
+    #[serde(default)]
+    pub recv_chain_key_b64: Option<String>,
+    #[serde(default)]
+    pub send_counter: u64,
+    #[serde(default)]
+    pub recv_counter: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct PeerSession {
+    pub shared_key_b64: String,
+    pub send_chain_key_b64: String,
+    pub recv_chain_key_b64: String,
+    pub send_counter: u64,
+    pub recv_counter: u64,
 }

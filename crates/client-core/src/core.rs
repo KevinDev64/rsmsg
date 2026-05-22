@@ -1,5 +1,6 @@
 use anyhow::Result;
 use crypto::CryptoEngine;
+use serde::{Deserialize, Serialize};
 use shared::{
     DeviceLoginRequest, FetchPrekeyBundleResponse, RegisterDeviceRequest, SendMessageRequest,
     UploadPrekeysRequest, UserLoginRequest, UserRegisterRequest,
@@ -15,9 +16,16 @@ use crate::{
     transport::ApiTransport,
     types::{
         ClientConfig, DecryptedMessage, DeviceAuth, LocalDeviceKeys, OutgoingMessageStatus,
-        PendingEnvelope,
+        PeerSession, PendingEnvelope,
     },
 };
+
+#[derive(Serialize, Deserialize)]
+struct RatchetEnvelope {
+    v: u8,
+    counter: u64,
+    envelope_b64: String,
+}
 
 #[derive(Clone)]
 pub struct ClientCore {
@@ -26,7 +34,7 @@ pub struct ClientCore {
     session_store_path: String,
     key_store_path: String,
     local_password: Arc<Mutex<Option<String>>>,
-    peer_sessions: Arc<Mutex<HashMap<String, String>>>,
+    peer_sessions: Arc<Mutex<HashMap<String, PeerSession>>>,
 }
 
 impl ClientCore {
@@ -223,7 +231,7 @@ impl ClientCore {
         let Some(key) = key else {
             return Ok(false);
         };
-        self.send_text_message(auth, peer_device_uuid, plaintext, &key)
+        self.send_text_message(auth, peer_device_uuid, plaintext, &key.shared_key_b64)
             .await
     }
 
@@ -234,17 +242,35 @@ impl ClientCore {
         plaintext: String,
         message_id: String,
     ) -> Result<bool> {
-        let key = self
-            .peer_sessions
-            .lock()
-            .expect("peer_sessions")
-            .get(&peer_device_uuid)
-            .cloned();
-        let Some(key) = key else {
-            return Ok(false);
+        let envelope_b64 = {
+            let mut sessions = self.peer_sessions.lock().expect("peer_sessions");
+            let Some(session) = sessions.get_mut(&peer_device_uuid) else {
+                return Ok(false);
+            };
+            let (message_key, next_chain_key) =
+                self.crypto.ratchet_step_b64(&session.send_chain_key_b64)?;
+            let inner = self.crypto.encrypt_text_to_b64(&message_key, &plaintext)?;
+            let envelope = RatchetEnvelope {
+                v: 2,
+                counter: session.send_counter,
+                envelope_b64: inner,
+            };
+            session.send_chain_key_b64 = next_chain_key;
+            session.send_counter += 1;
+            base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                serde_json::to_vec(&envelope)?,
+            )
         };
-        self.send_text_message_with_id(auth, peer_device_uuid, plaintext, &key, message_id)
-            .await
+        let req = SendMessageRequest {
+            message_id,
+            from_device_uuid: auth.device_uuid.clone(),
+            to_device_uuid: peer_device_uuid,
+            envelope_b64,
+        };
+        let sent = self.send_message(auth, req).await;
+        let _ = self.persist_sessions();
+        sent
     }
 
     pub fn has_peer_session(&self, peer_device_uuid: &str) -> bool {
@@ -308,7 +334,14 @@ impl ClientCore {
         self.peer_sessions
             .lock()
             .expect("peer_sessions")
-            .insert(bundle.device_uuid.clone(), key_b64.clone());
+            .entry(bundle.device_uuid.clone())
+            .or_insert_with(|| PeerSession {
+                shared_key_b64: key_b64.clone(),
+                send_chain_key_b64: key_b64.clone(),
+                recv_chain_key_b64: key_b64.clone(),
+                send_counter: 0,
+                recv_counter: 0,
+            });
         let _ = self.persist_sessions();
         Ok((key_b64, bundle))
     }
@@ -348,12 +381,14 @@ impl ClientCore {
         &self,
         pending: Vec<PendingEnvelope>,
     ) -> (Vec<DecryptedMessage>, Vec<String>) {
-        let sessions = self.peer_sessions.lock().expect("peer_sessions");
+        let mut sessions = self.peer_sessions.lock().expect("peer_sessions");
         let mut out = Vec::new();
         let mut ack_ids = Vec::new();
         for item in pending {
-            if let Some(key) = sessions.get(&item.from_device_uuid) {
-                if let Ok(plaintext) = self.crypto.decrypt_text_from_b64(key, &item.envelope_b64) {
+            if let Some(session) = sessions.get_mut(&item.from_device_uuid) {
+                if let Ok(plaintext) =
+                    decrypt_with_session(&self.crypto, session, &item.envelope_b64)
+                {
                     ack_ids.push(item.message_id.clone());
                     out.push(DecryptedMessage {
                         message_id: item.message_id,
@@ -364,6 +399,8 @@ impl ClientCore {
                 }
             }
         }
+        drop(sessions);
+        let _ = self.persist_sessions();
         (out, ack_ids)
     }
 
@@ -373,4 +410,32 @@ impl ClientCore {
         session_store::save(&self.session_store_path, &sessions, password.as_deref())?;
         Ok(())
     }
+}
+
+fn decrypt_with_session(
+    crypto: &CryptoEngine,
+    session: &mut PeerSession,
+    envelope_b64: &str,
+) -> Result<String> {
+    let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, envelope_b64)?;
+    if let Ok(envelope) = serde_json::from_slice::<RatchetEnvelope>(&decoded) {
+        if envelope.v == 2 {
+            while session.recv_counter < envelope.counter {
+                let (_skipped, next_chain_key) =
+                    crypto.ratchet_step_b64(&session.recv_chain_key_b64)?;
+                session.recv_chain_key_b64 = next_chain_key;
+                session.recv_counter += 1;
+            }
+            if session.recv_counter != envelope.counter {
+                return Err(anyhow::anyhow!("stale ratchet message"));
+            }
+            let (message_key, next_chain_key) =
+                crypto.ratchet_step_b64(&session.recv_chain_key_b64)?;
+            let plaintext = crypto.decrypt_text_from_b64(&message_key, &envelope.envelope_b64)?;
+            session.recv_chain_key_b64 = next_chain_key;
+            session.recv_counter += 1;
+            return Ok(plaintext);
+        }
+    }
+    crypto.decrypt_text_from_b64(&session.shared_key_b64, envelope_b64)
 }
