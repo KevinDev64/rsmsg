@@ -477,8 +477,7 @@ impl eframe::App for MessengerApp {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 if let Some(messages) = self.history.chats.get(&self.selected_chat) {
                     for m in messages {
-                        let who = if m.outgoing { "You" } else { "Peer" };
-                        ui.label(format!("{who}: {}", m.text));
+                        render_message_bubble(ui, m, &self.selected_chat);
                     }
                 }
             });
@@ -492,10 +491,55 @@ impl eframe::App for MessengerApp {
     }
 }
 
+fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &str) {
+    let bubble_color = if message.outgoing {
+        egui::Color32::from_rgb(56, 120, 255)
+    } else {
+        egui::Color32::from_rgb(44, 48, 58)
+    };
+    let text_color = egui::Color32::WHITE;
+    let meta = if message.outgoing {
+        format!("You · {}", format_message_time(message.ts))
+    } else {
+        format!("@{peer} · {}", format_message_time(message.ts))
+    };
+    let max_width = ui.available_width() * 0.72;
+    let frame = egui::Frame::new()
+        .fill(bubble_color)
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::symmetric(12, 8));
+
+    if message.outgoing {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+            frame.show(ui, |ui| {
+                ui.set_max_width(max_width);
+                ui.label(egui::RichText::new(&meta).small().color(text_color));
+                ui.label(egui::RichText::new(&message.text).color(text_color));
+            });
+        });
+    } else {
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+            frame.show(ui, |ui| {
+                ui.set_max_width(max_width);
+                ui.label(egui::RichText::new(&meta).small().color(text_color));
+                ui.label(egui::RichText::new(&message.text).color(text_color));
+            });
+        });
+    }
+    ui.add_space(6.0);
+}
+
 fn chrono_like_now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let Ok(dur) = SystemTime::now().duration_since(UNIX_EPOCH) else {
         return 0;
     };
     (dur.as_secs() as i64) * 1000 + (dur.subsec_millis() as i64)
+}
+
+fn format_message_time(ts_ms: i64) -> String {
+    let seconds = (ts_ms / 1000).rem_euclid(86_400);
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    format!("{hours:02}:{minutes:02}")
 }
