@@ -165,6 +165,7 @@ impl MessengerApp {
                 self.history
                     .device_uuid_by_peer
                     .insert(peer.clone(), resolved_uuid);
+                self.mark_selected_chat_read(&rt, &auth);
                 self.history.save();
                 self.status = format!("Chat with @{peer} ready");
             }
@@ -332,16 +333,43 @@ impl MessengerApp {
                 }
             }
         }
-        let (decrypted, ack_ids) = self.core.decrypt_pending_with_sessions(pending);
-        if !ack_ids.is_empty() {
-            let _ = rt.block_on(self.core.ack_messages(&auth, ack_ids));
-        }
+        let (decrypted, _ack_ids) = self.core.decrypt_pending_with_sessions(pending);
         for msg in decrypted {
             self.push_incoming(msg);
         }
+        self.mark_selected_chat_read(&rt, &auth);
         self.sync_outgoing_statuses(&rt, &auth);
         self.history.save();
         self.last_sync_at = Instant::now();
+    }
+
+    fn mark_selected_chat_read(&mut self, rt: &tokio::runtime::Runtime, auth: &DeviceAuth) {
+        if self.selected_chat.is_empty() {
+            return;
+        }
+        let Some(messages) = self.history.chats.get_mut(&self.selected_chat) else {
+            return;
+        };
+        let message_ids: Vec<String> = messages
+            .iter()
+            .filter(|message| !message.outgoing && message.status != MessageStatus::Read)
+            .filter_map(|message| message.message_id.clone())
+            .collect();
+        if message_ids.is_empty() {
+            self.history.unread_by_peer.remove(&self.selected_chat);
+            return;
+        }
+        if rt
+            .block_on(self.core.ack_messages(auth, message_ids))
+            .is_ok()
+        {
+            for message in messages {
+                if !message.outgoing {
+                    message.status = MessageStatus::Read;
+                }
+            }
+            self.history.unread_by_peer.remove(&self.selected_chat);
+        }
     }
 
     fn sync_outgoing_statuses(&mut self, rt: &tokio::runtime::Runtime, auth: &DeviceAuth) {
@@ -394,7 +422,7 @@ impl MessengerApp {
             outgoing: false,
             text: msg.plaintext,
             ts: msg.created_at_unix_ms,
-            status: MessageStatus::Read,
+            status: MessageStatus::Delivered,
             message_id: Some(msg.message_id),
         });
         if self.selected_chat != nick {
@@ -479,7 +507,10 @@ impl eframe::App for MessengerApp {
                 };
                 if ui.selectable_label(selected, label).clicked() {
                     self.selected_chat = nick.clone();
-                    self.history.unread_by_peer.remove(&nick);
+                    if let Some(auth) = self.auth.clone() {
+                        let rt = runtime();
+                        self.mark_selected_chat_read(&rt, &auth);
+                    }
                     self.history.save();
                 }
             }
