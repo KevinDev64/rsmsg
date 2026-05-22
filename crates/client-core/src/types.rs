@@ -18,6 +18,24 @@ impl ClientConfig {
             key_store_path: format!(".rsmsg_local_keys.{profile}.json"),
         }
     }
+
+    pub fn for_server(server: &str) -> Self {
+        let mut config = Self::local_default();
+        let mut http_base = server.trim().trim_end_matches('/').to_string();
+        if !http_base.starts_with("http://") && !http_base.starts_with("https://") {
+            http_base = format!("http://{http_base}");
+        }
+        let ws_base = if let Some(rest) = http_base.strip_prefix("https://") {
+            format!("wss://{rest}")
+        } else if let Some(rest) = http_base.strip_prefix("http://") {
+            format!("ws://{rest}")
+        } else {
+            http_base.clone()
+        };
+        config.http_base = http_base;
+        config.ws_base = ws_base;
+        config
+    }
 }
 
 #[derive(Clone, Debug)]

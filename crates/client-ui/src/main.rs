@@ -69,6 +69,7 @@ struct MessengerApp {
     core: ClientCore,
     local_keys: LocalDeviceKeys,
     history: ChatHistory,
+    server_input: String,
     nickname: String,
     password: String,
     auth: Option<DeviceAuth>,
@@ -82,12 +83,15 @@ struct MessengerApp {
 
 impl MessengerApp {
     fn new() -> Self {
-        let core = ClientCore::new(ClientConfig::local_default());
+        let config = ClientConfig::local_default();
+        let server_input = config.http_base.clone();
+        let core = ClientCore::new(config);
         let local_keys = core.load_or_create_local_device_keys();
         Self {
             core,
             local_keys,
             history: ChatHistory::load(),
+            server_input,
             nickname: String::new(),
             password: String::new(),
             auth: None,
@@ -105,6 +109,7 @@ impl MessengerApp {
             self.status = "Enter nickname and password (>=6)".to_string();
             return;
         }
+        self.apply_server_config();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -158,6 +163,13 @@ impl MessengerApp {
             }
             Err(err) => self.status = format!("Login failed: {err}"),
         }
+    }
+
+    fn apply_server_config(&mut self) {
+        let config = ClientConfig::for_server(&self.server_input);
+        self.server_input = config.http_base.clone();
+        self.core = ClientCore::new(config);
+        self.local_keys = self.core.load_or_create_local_device_keys();
     }
 
     fn open_chat(&mut self) {
