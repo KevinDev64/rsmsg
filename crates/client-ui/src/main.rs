@@ -615,6 +615,8 @@ fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &str) {
         )
     };
     let max_width = ui.available_width() * 0.72;
+    let display_text = hard_wrap_long_words(&message.text, 48);
+    let bubble_width = estimate_bubble_width(&display_text, &meta, max_width);
     let frame = egui::Frame::new()
         .fill(bubble_color)
         .corner_radius(egui::CornerRadius::same(14))
@@ -623,13 +625,13 @@ fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &str) {
     if message.outgoing {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
             frame.show(ui, |ui| {
-                render_bubble_content(ui, &meta, &message.text, text_color, max_width)
+                render_bubble_content(ui, &meta, &display_text, text_color, bubble_width)
             });
         });
     } else {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
             frame.show(ui, |ui| {
-                render_bubble_content(ui, &meta, &message.text, text_color, max_width)
+                render_bubble_content(ui, &meta, &display_text, text_color, bubble_width)
             });
         });
     }
@@ -641,17 +643,40 @@ fn render_bubble_content(
     meta: &str,
     text: &str,
     text_color: egui::Color32,
-    max_width: f32,
+    width: f32,
 ) {
-    ui.set_max_width(max_width);
-    ui.add_sized(
-        [max_width, 0.0],
-        egui::Label::new(egui::RichText::new(meta).small().color(text_color)).wrap(),
-    );
-    ui.add_sized(
-        [max_width, 0.0],
-        egui::Label::new(egui::RichText::new(text).color(text_color)).wrap(),
-    );
+    ui.set_width(width);
+    ui.add(egui::Label::new(egui::RichText::new(meta).small().color(text_color)).wrap());
+    ui.add(egui::Label::new(egui::RichText::new(text).color(text_color)).wrap());
+}
+
+fn estimate_bubble_width(text: &str, meta: &str, max_width: f32) -> f32 {
+    let longest = text
+        .lines()
+        .chain(meta.lines())
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(1);
+    ((longest as f32 * 7.5) + 8.0).clamp(96.0, max_width)
+}
+
+fn hard_wrap_long_words(text: &str, max_run: usize) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut run = 0_usize;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            run = 0;
+            out.push(ch);
+        } else {
+            if run >= max_run {
+                out.push('\n');
+                run = 0;
+            }
+            out.push(ch);
+            run += 1;
+        }
+    }
+    out
 }
 
 fn chrono_like_now_ms() -> i64 {
