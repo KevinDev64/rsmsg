@@ -8,7 +8,7 @@ use crate::{
     repository::blobs,
 };
 
-const MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
+const MAX_BLOB_BYTES: usize = 100 * 1024 * 1024;
 
 pub async fn upload_blob(
     db: &sqlx::PgPool,

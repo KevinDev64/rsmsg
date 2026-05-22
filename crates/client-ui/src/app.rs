@@ -20,7 +20,7 @@ use crate::{
 };
 
 const DEFAULT_DEVICE_ID: &str = "main";
-const MAX_FILE_BYTES: usize = 10 * 1024 * 1024;
+const MAX_FILE_BYTES: usize = 100 * 1024 * 1024;
 
 pub struct MessengerApp {
     core: ClientCore,
@@ -352,7 +352,7 @@ impl MessengerApp {
             return;
         };
         if data.len() > MAX_FILE_BYTES {
-            self.status = "File is too large. Limit is 10 MB".to_string();
+            self.status = "File is too large. Limit is 100 MB".to_string();
             return;
         }
         let file_name = path
