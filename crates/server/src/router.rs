@@ -1,5 +1,6 @@
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     routing::{get, post},
 };
 
@@ -7,6 +8,8 @@ use crate::{
     app_state::AppState,
     handlers::{blob, device, health, messaging, user, ws},
 };
+
+const MAX_REQUEST_BODY_BYTES: usize = 150 * 1024 * 1024;
 
 pub fn build_router(app_state: AppState) -> Router {
     Router::new()
@@ -31,5 +34,6 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/message_status", post(messaging::message_status))
         .route("/v1/upload_blob", post(blob::upload_blob))
         .route("/v1/fetch_blob", post(blob::fetch_blob))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .with_state(app_state)
 }
