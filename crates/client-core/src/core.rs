@@ -307,16 +307,13 @@ impl ClientCore {
     ) -> Result<bool> {
         let file_key_b64 = self.crypto.generate_shared_key_b64();
         let encrypted_blob = self.crypto.encrypt_bytes(&file_key_b64, &data)?;
-        let uploaded = self
-            .transport
-            .upload_blob_bytes(auth, encrypted_blob)
-            .await?;
+        let blob_id = self.upload_blob_chunked(auth, encrypted_blob).await?;
         let payload = EncryptedMessagePayload::File {
             v: 2,
             file_name,
             file_size: data.len() as u64,
             data_b64: None,
-            blob_id: Some(uploaded.blob_id),
+            blob_id: Some(blob_id),
             file_key_b64: Some(file_key_b64),
         };
         let plaintext = serde_json::to_string(&payload)?;
@@ -332,6 +329,25 @@ impl ClientCore {
     ) -> Result<Vec<u8>> {
         let blob = self.transport.fetch_blob_bytes(auth, blob_id).await?;
         self.crypto.decrypt_bytes(&file_key_b64, &blob)
+    }
+
+    async fn upload_blob_chunked(
+        &self,
+        auth: &DeviceAuth,
+        encrypted_blob: Vec<u8>,
+    ) -> Result<String> {
+        const CHUNK_SIZE: usize = 256 * 1024;
+        let created = self.transport.create_blob(auth).await?;
+        for chunk in encrypted_blob.chunks(CHUNK_SIZE) {
+            self.transport
+                .append_blob_chunk(
+                    auth,
+                    created.blob_id.clone(),
+                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, chunk),
+                )
+                .await?;
+        }
+        Ok(created.blob_id)
     }
 
     pub fn has_peer_session(&self, peer_device_uuid: &str) -> bool {

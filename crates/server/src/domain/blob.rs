@@ -1,6 +1,9 @@
 use axum::http::StatusCode;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use shared::{FetchBlobRequest, FetchBlobResponse, UploadBlobRequest, UploadBlobResponse};
+use shared::{
+    AppendBlobChunkRequest, AppendBlobChunkResponse, CreateBlobResponse, FetchBlobRequest,
+    FetchBlobResponse, UploadBlobRequest, UploadBlobResponse,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -9,6 +12,7 @@ use crate::{
 };
 
 const MAX_BLOB_BYTES: usize = 100 * 1024 * 1024;
+const MAX_BLOB_CHUNK_BYTES: usize = 512 * 1024;
 
 pub async fn upload_blob(
     db: &sqlx::PgPool,
@@ -63,6 +67,46 @@ pub async fn upload_blob_bytes(
     Ok(UploadBlobResponse {
         blob_id: blob_id.to_string(),
     })
+}
+
+pub async fn create_blob(db: &sqlx::PgPool, owner_device: Uuid) -> ApiResult<CreateBlobResponse> {
+    let blob_id = blobs::create_blob(db, owner_device)
+        .await
+        .map_err(|err| ApiError::database("create_blob insert failed", err))?;
+    tracing::info!(%blob_id, "created chunked blob");
+    Ok(CreateBlobResponse {
+        blob_id: blob_id.to_string(),
+    })
+}
+
+pub async fn append_blob_chunk(
+    db: &sqlx::PgPool,
+    owner_device: Uuid,
+    payload: AppendBlobChunkRequest,
+) -> ApiResult<AppendBlobChunkResponse> {
+    let blob_id = Uuid::parse_str(&payload.blob_id)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid blob id"))?;
+    let chunk = STANDARD
+        .decode(payload.chunk_b64)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid blob chunk"))?;
+    if chunk.len() > MAX_BLOB_CHUNK_BYTES {
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "blob chunk too large",
+        ));
+    }
+    let size = blobs::append_blob_chunk(db, owner_device, blob_id, chunk)
+        .await
+        .map_err(|err| ApiError::database("append_blob_chunk update failed", err))?
+        .ok_or(ApiError::new(StatusCode::NOT_FOUND, "blob not found"))?;
+    if size as usize > MAX_BLOB_BYTES {
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "blob too large",
+        ));
+    }
+    tracing::info!(%blob_id, size, "appended blob chunk");
+    Ok(AppendBlobChunkResponse { size: size as u64 })
 }
 
 pub async fn fetch_blob(

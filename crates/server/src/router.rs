@@ -37,6 +37,8 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/fetch_blob", post(blob::fetch_blob))
         .route("/v1/upload_blob_bytes", post(blob::upload_blob_bytes))
         .route("/v1/fetch_blob_bytes", post(blob::fetch_blob_bytes))
+        .route("/v1/create_blob", post(blob::create_blob))
+        .route("/v1/append_blob_chunk", post(blob::append_blob_chunk))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(app_state)

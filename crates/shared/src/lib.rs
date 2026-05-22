@@ -134,6 +134,22 @@ pub struct UploadBlobResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBlobResponse {
+    pub blob_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppendBlobChunkRequest {
+    pub blob_id: String,
+    pub chunk_b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppendBlobChunkResponse {
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FetchBlobRequest {
     pub blob_id: String,
 }

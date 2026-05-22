@@ -5,7 +5,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use shared::{FetchBlobRequest, FetchBlobResponse, UploadBlobRequest, UploadBlobResponse};
+use shared::{
+    AppendBlobChunkRequest, AppendBlobChunkResponse, CreateBlobResponse, FetchBlobRequest,
+    FetchBlobResponse, UploadBlobRequest, UploadBlobResponse,
+};
 
 use crate::{api_error::ApiResult, app_state::AppState, auth::authorize_device, domain::blob};
 
@@ -33,6 +36,25 @@ pub async fn upload_blob_bytes(
     let auth_device = authorize_device(&state.db, &headers).await?;
     Ok(Json(
         blob::upload_blob_bytes(&state.db, auth_device, body.to_vec()).await?,
+    ))
+}
+
+pub async fn create_blob(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<CreateBlobResponse>> {
+    let auth_device = authorize_device(&state.db, &headers).await?;
+    Ok(Json(blob::create_blob(&state.db, auth_device).await?))
+}
+
+pub async fn append_blob_chunk(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AppendBlobChunkRequest>,
+) -> ApiResult<Json<AppendBlobChunkResponse>> {
+    let auth_device = authorize_device(&state.db, &headers).await?;
+    Ok(Json(
+        blob::append_blob_chunk(&state.db, auth_device, payload).await?,
     ))
 }
 

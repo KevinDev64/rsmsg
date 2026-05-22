@@ -2,14 +2,14 @@ use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{HeaderMap, HeaderValue};
 use shared::{
-    AckMessageRequest, DeviceLoginRequest, DeviceLoginResponse, DeviceLogoutRequest,
-    DeviceLogoutResponse, FetchBlobRequest, FetchPendingRequest, FetchPendingResponse,
-    FetchPrekeyBundleRequest, FetchPrekeyBundleResponse, MessageStatusRequest,
-    MessageStatusResponse, RegisterDeviceRequest, RegisterDeviceResponse, ResolveDeviceRequest,
-    ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse, SendMessageRequest,
-    SendMessageResponse, UploadBlobResponse, UploadPrekeysRequest, UploadPrekeysResponse,
-    UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserRegisterResponse,
-    UserSearchRequest, UserSearchResponse,
+    AckMessageRequest, AppendBlobChunkRequest, AppendBlobChunkResponse, CreateBlobResponse,
+    DeviceLoginRequest, DeviceLoginResponse, DeviceLogoutRequest, DeviceLogoutResponse,
+    FetchBlobRequest, FetchPendingRequest, FetchPendingResponse, FetchPrekeyBundleRequest,
+    FetchPrekeyBundleResponse, MessageStatusRequest, MessageStatusResponse, RegisterDeviceRequest,
+    RegisterDeviceResponse, ResolveDeviceRequest, ResolveDeviceResponse, ResolveUserRequest,
+    ResolveUserResponse, SendMessageRequest, SendMessageResponse, UploadPrekeysRequest,
+    UploadPrekeysResponse, UserLoginRequest, UserLoginResponse, UserRegisterRequest,
+    UserRegisterResponse, UserSearchRequest, UserSearchResponse,
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -255,29 +255,38 @@ impl ApiTransport {
         Ok(response.json().await?)
     }
 
-    pub async fn upload_blob_bytes(
-        &self,
-        auth: &DeviceAuth,
-        data: Vec<u8>,
-    ) -> Result<UploadBlobResponse> {
-        let url = format!("{}/v1/upload_blob_bytes", self.cfg.http_base);
-        let bytes_len = data.len();
+    pub async fn create_blob(&self, auth: &DeviceAuth) -> Result<CreateBlobResponse> {
+        let url = format!("{}/v1/create_blob", self.cfg.http_base);
         let response = self
             .client
             .post(url)
             .headers(self.auth_headers(auth)?)
-            .body(data)
             .send()
-            .await
-            .map_err(|err| {
-                anyhow!("upload_blob_bytes request failed, bytes_len={bytes_len}: {err:#}")
-            })?;
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow!("create_blob failed with {}", response.status()));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn append_blob_chunk(
+        &self,
+        auth: &DeviceAuth,
+        blob_id: String,
+        chunk_b64: String,
+    ) -> Result<AppendBlobChunkResponse> {
+        let url = format!("{}/v1/append_blob_chunk", self.cfg.http_base);
+        let response = self
+            .client
+            .post(url)
+            .headers(self.auth_headers(auth)?)
+            .json(&AppendBlobChunkRequest { blob_id, chunk_b64 })
+            .send()
+            .await?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "upload_blob_bytes failed with {status}, bytes_len={bytes_len}: {body}"
-            ));
+            return Err(anyhow!("append_blob_chunk failed with {status}: {body}"));
         }
         Ok(response.json().await?)
     }

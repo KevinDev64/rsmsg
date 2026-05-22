@@ -14,6 +14,35 @@ pub async fn insert_blob(
     .await
 }
 
+pub async fn create_blob(db: &sqlx::PgPool, owner_device: Uuid) -> Result<Uuid, sqlx::Error> {
+    sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO blobs (owner_device, data) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(owner_device)
+    .bind(Vec::<u8>::new())
+    .fetch_one(db)
+    .await
+}
+
+pub async fn append_blob_chunk(
+    db: &sqlx::PgPool,
+    owner_device: Uuid,
+    blob_id: Uuid,
+    chunk: Vec<u8>,
+) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        "UPDATE blobs \
+         SET data = data || $1 \
+         WHERE id = $2 AND owner_device = $3 \
+         RETURNING octet_length(data)::BIGINT",
+    )
+    .bind(chunk)
+    .bind(blob_id)
+    .bind(owner_device)
+    .fetch_optional(db)
+    .await
+}
+
 pub async fn fetch_blob(db: &sqlx::PgPool, blob_id: Uuid) -> Result<Option<Vec<u8>>, sqlx::Error> {
     sqlx::query_scalar::<_, Vec<u8>>("SELECT data FROM blobs WHERE id = $1")
         .bind(blob_id)
