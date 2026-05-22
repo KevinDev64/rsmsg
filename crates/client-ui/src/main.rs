@@ -284,6 +284,19 @@ impl MessengerApp {
             return;
         }
         let text = self.message_input.clone();
+        let chat_name = self.selected_chat.clone();
+        let message_index = {
+            let chat = self.history.chats.entry(chat_name.clone()).or_default();
+            chat.push(ChatMessage {
+                outgoing: true,
+                text: text.clone(),
+                ts: chrono_like_now_ms(),
+                status: MessageStatus::Sending,
+            });
+            chat.len() - 1
+        };
+        self.message_input.clear();
+        self.history.save();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -293,22 +306,31 @@ impl MessengerApp {
                 .send_text_to_peer(&auth, peer_device_uuid, text.clone()),
         ) {
             Ok(true) => {
-                self.history
-                    .chats
-                    .entry(self.selected_chat.clone())
-                    .or_default()
-                    .push(ChatMessage {
-                        outgoing: true,
-                        text,
-                        ts: chrono_like_now_ms(),
-                        status: MessageStatus::Sent,
-                    });
+                self.update_message_status(&chat_name, message_index, MessageStatus::Sent);
                 self.history.save();
-                self.message_input.clear();
                 self.status = "Sent".to_string();
             }
-            Ok(false) => self.status = "Peer session missing. Re-open chat.".to_string(),
-            Err(err) => self.status = format!("Send failed: {err}"),
+            Ok(false) => {
+                self.update_message_status(&chat_name, message_index, MessageStatus::Failed);
+                self.history.save();
+                self.status = "Peer session missing. Re-open chat.".to_string();
+            }
+            Err(err) => {
+                self.update_message_status(&chat_name, message_index, MessageStatus::Failed);
+                self.history.save();
+                self.status = format!("Send failed: {err}");
+            }
+        }
+    }
+
+    fn update_message_status(&mut self, chat_name: &str, index: usize, status: MessageStatus) {
+        if let Some(message) = self
+            .history
+            .chats
+            .get_mut(chat_name)
+            .and_then(|messages| messages.get_mut(index))
+        {
+            message.status = status;
         }
     }
 
@@ -564,9 +586,17 @@ fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &str) {
     };
     let text_color = egui::Color32::WHITE;
     let meta = if message.outgoing {
-        format!("You · {}", format_message_time(message.ts))
+        format!(
+            "You · {} · {}",
+            format_message_time(message.ts),
+            message_status_label(message.status)
+        )
     } else {
-        format!("@{peer} · {}", format_message_time(message.ts))
+        format!(
+            "@{peer} · {} · {}",
+            format_message_time(message.ts),
+            message_status_label(message.status)
+        )
     };
     let max_width = ui.available_width() * 0.72;
     let frame = egui::Frame::new()
@@ -621,4 +651,14 @@ fn format_message_time(ts_ms: i64) -> String {
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;
     format!("{hours:02}:{minutes:02}")
+}
+
+fn message_status_label(status: MessageStatus) -> &'static str {
+    match status {
+        MessageStatus::Sending => "sending",
+        MessageStatus::Sent => "sent",
+        MessageStatus::Delivered => "delivered",
+        MessageStatus::Read => "read",
+        MessageStatus::Failed => "failed",
+    }
 }
