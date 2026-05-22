@@ -8,6 +8,7 @@ use std::{
 use client_core::{ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, LocalDeviceKeys};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 const DEFAULT_DEVICE_ID: &str = "main";
 fn history_file() -> String {
@@ -35,6 +36,8 @@ struct ChatMessage {
     ts: i64,
     #[serde(default)]
     status: MessageStatus,
+    #[serde(default)]
+    message_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -292,6 +295,7 @@ impl MessengerApp {
         }
         let text = self.message_input.clone();
         let chat_name = self.selected_chat.clone();
+        let message_id = Uuid::new_v4().to_string();
         let message_index = {
             let chat = self.history.chats.entry(chat_name.clone()).or_default();
             chat.push(ChatMessage {
@@ -299,6 +303,7 @@ impl MessengerApp {
                 text: text.clone(),
                 ts: chrono_like_now_ms(),
                 status: MessageStatus::Sending,
+                message_id: Some(message_id.clone()),
             });
             chat.len() - 1
         };
@@ -308,10 +313,12 @@ impl MessengerApp {
             .enable_all()
             .build()
             .expect("runtime");
-        match rt.block_on(
-            self.core
-                .send_text_to_peer(&auth, peer_device_uuid, text.clone()),
-        ) {
+        match rt.block_on(self.core.send_text_to_peer_with_id(
+            &auth,
+            peer_device_uuid,
+            text.clone(),
+            message_id,
+        )) {
             Ok(true) => {
                 self.update_message_status(&chat_name, message_index, MessageStatus::Sent);
                 self.history.save();
@@ -429,8 +436,42 @@ impl MessengerApp {
         for msg in decrypted {
             self.push_incoming(msg);
         }
+        self.sync_outgoing_statuses(&rt, &auth);
         self.history.save();
         self.last_sync_at = Instant::now();
+    }
+
+    fn sync_outgoing_statuses(&mut self, rt: &tokio::runtime::Runtime, auth: &DeviceAuth) {
+        let message_ids: Vec<String> = self
+            .history
+            .chats
+            .values()
+            .flat_map(|messages| messages.iter())
+            .filter(|message| message.outgoing && !matches!(message.status, MessageStatus::Read))
+            .filter_map(|message| message.message_id.clone())
+            .collect();
+        if message_ids.is_empty() {
+            return;
+        }
+        let Ok(statuses) = rt.block_on(self.core.message_statuses(auth, message_ids)) else {
+            return;
+        };
+        for status in statuses {
+            let next = if status.read {
+                MessageStatus::Read
+            } else if status.delivered {
+                MessageStatus::Delivered
+            } else {
+                MessageStatus::Sent
+            };
+            for messages in self.history.chats.values_mut() {
+                for message in messages {
+                    if message.message_id.as_deref() == Some(status.message_id.as_str()) {
+                        message.status = next;
+                    }
+                }
+            }
+        }
     }
 
     fn push_incoming(&mut self, msg: DecryptedMessage) {
@@ -451,6 +492,7 @@ impl MessengerApp {
             text: msg.plaintext,
             ts: msg.created_at_unix_ms,
             status: MessageStatus::Read,
+            message_id: Some(msg.message_id),
         });
         if self.selected_chat != nick {
             *self.history.unread_by_peer.entry(nick).or_default() += 1;
@@ -657,7 +699,7 @@ fn estimate_bubble_width(text: &str, meta: &str, max_width: f32) -> f32 {
         .map(|line| line.chars().count())
         .max()
         .unwrap_or(1);
-    ((longest as f32 * 7.5) + 8.0).clamp(96.0, max_width)
+    ((longest as f32 * 7.5) + 8.0).clamp(48.0, max_width)
 }
 
 fn hard_wrap_long_words(text: &str, max_run: usize) -> String {
