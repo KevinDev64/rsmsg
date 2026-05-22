@@ -18,6 +18,10 @@ pub struct ChatMessage {
     pub file_size: Option<u64>,
     #[serde(default)]
     pub file_data_b64: Option<String>,
+    #[serde(default)]
+    pub blob_id: Option<String>,
+    #[serde(default)]
+    pub file_key_b64: Option<String>,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -3,12 +3,13 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{HeaderMap, HeaderValue};
 use shared::{
     AckMessageRequest, DeviceLoginRequest, DeviceLoginResponse, DeviceLogoutRequest,
-    DeviceLogoutResponse, FetchPendingRequest, FetchPendingResponse, FetchPrekeyBundleRequest,
-    FetchPrekeyBundleResponse, MessageStatusRequest, MessageStatusResponse, RegisterDeviceRequest,
-    RegisterDeviceResponse, ResolveDeviceRequest, ResolveDeviceResponse, ResolveUserRequest,
-    ResolveUserResponse, SendMessageRequest, SendMessageResponse, UploadPrekeysRequest,
-    UploadPrekeysResponse, UserLoginRequest, UserLoginResponse, UserRegisterRequest,
-    UserRegisterResponse, UserSearchRequest, UserSearchResponse,
+    DeviceLogoutResponse, FetchBlobRequest, FetchBlobResponse, FetchPendingRequest,
+    FetchPendingResponse, FetchPrekeyBundleRequest, FetchPrekeyBundleResponse,
+    MessageStatusRequest, MessageStatusResponse, RegisterDeviceRequest, RegisterDeviceResponse,
+    ResolveDeviceRequest, ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse,
+    SendMessageRequest, SendMessageResponse, UploadBlobRequest, UploadBlobResponse,
+    UploadPrekeysRequest, UploadPrekeysResponse, UserLoginRequest, UserLoginResponse,
+    UserRegisterRequest, UserRegisterResponse, UserSearchRequest, UserSearchResponse,
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -250,6 +251,44 @@ impl ApiTransport {
             .await?;
         if !response.status().is_success() {
             return Err(anyhow!("message_status failed with {}", response.status()));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn upload_blob(
+        &self,
+        auth: &DeviceAuth,
+        data_b64: String,
+    ) -> Result<UploadBlobResponse> {
+        let url = format!("{}/v1/upload_blob", self.cfg.http_base);
+        let response = self
+            .client
+            .post(url)
+            .headers(self.auth_headers(auth)?)
+            .json(&UploadBlobRequest { data_b64 })
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow!("upload_blob failed with {}", response.status()));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn fetch_blob(
+        &self,
+        auth: &DeviceAuth,
+        blob_id: String,
+    ) -> Result<FetchBlobResponse> {
+        let url = format!("{}/v1/fetch_blob", self.cfg.http_base);
+        let response = self
+            .client
+            .post(url)
+            .headers(self.auth_headers(auth)?)
+            .json(&FetchBlobRequest { blob_id })
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow!("fetch_blob failed with {}", response.status()));
         }
         Ok(response.json().await?)
     }

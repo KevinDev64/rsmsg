@@ -302,6 +302,8 @@ impl MessengerApp {
                 file_name: None,
                 file_size: None,
                 file_data_b64: None,
+                blob_id: None,
+                file_key_b64: None,
             });
             chat.len() - 1
         };
@@ -374,6 +376,8 @@ impl MessengerApp {
                     &base64::engine::general_purpose::STANDARD,
                     &data,
                 )),
+                blob_id: None,
+                file_key_b64: None,
             });
             chat.len() - 1
         };
@@ -396,6 +400,50 @@ impl MessengerApp {
                 result,
             });
         });
+    }
+
+    fn save_file_message(&mut self, index: usize) {
+        let Some(auth) = self.auth.clone() else {
+            return;
+        };
+        let Some(message) = self
+            .history
+            .chats
+            .get(&self.selected_chat)
+            .and_then(|messages| messages.get(index))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(file_name) = message.file_name.clone() else {
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new().set_file_name(&file_name).save_file() else {
+            return;
+        };
+        if let Some(data_b64) = message.file_data_b64 {
+            if let Ok(data) =
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_b64)
+            {
+                let _ = std::fs::write(path, data);
+            }
+            return;
+        }
+        let (Some(blob_id), Some(file_key_b64)) = (message.blob_id, message.file_key_b64) else {
+            self.status = "File data is unavailable".to_string();
+            return;
+        };
+        let rt = runtime();
+        match rt.block_on(self.core.fetch_file_blob(&auth, blob_id, file_key_b64)) {
+            Ok(data) => {
+                if std::fs::write(path, data).is_ok() {
+                    self.status = format!("Saved {file_name}");
+                } else {
+                    self.status = "Could not save file".to_string();
+                }
+            }
+            Err(err) => self.status = format!("Could not fetch file: {err}"),
+        }
     }
 
     fn poll_send_result(&mut self) {
@@ -687,19 +735,23 @@ impl MessengerApp {
 
     fn push_incoming(&mut self, msg: DecryptedMessage) {
         let payload = serde_json::from_str::<EncryptedMessagePayload>(&msg.plaintext).ok();
-        let (text, file_name, file_size, file_data_b64) = match payload {
+        let (text, file_name, file_size, file_data_b64, blob_id, file_key_b64) = match payload {
             Some(EncryptedMessagePayload::File {
                 file_name,
                 file_size,
                 data_b64,
+                blob_id,
+                file_key_b64,
                 ..
             }) => (
                 format!("File: {file_name}"),
                 Some(file_name),
                 Some(file_size),
-                Some(data_b64),
+                data_b64,
+                blob_id,
+                file_key_b64,
             ),
-            None => (msg.plaintext, None, None, None),
+            None => (msg.plaintext, None, None, None, None, None),
         };
         let nick = self
             .history
@@ -722,6 +774,8 @@ impl MessengerApp {
             file_name,
             file_size,
             file_data_b64,
+            blob_id,
+            file_key_b64,
         });
         if self.selected_chat != nick {
             *self.history.unread_by_peer.entry(nick).or_default() += 1;
@@ -874,10 +928,16 @@ impl eframe::App for MessengerApp {
                 .stick_to_bottom(true)
                 .max_height(history_height)
                 .show(ui, |ui| {
+                    let mut save_index = None;
                     if let Some(messages) = self.history.chats.get(&self.selected_chat) {
-                        for m in messages {
-                            render_message_bubble(ui, m, &self.selected_chat);
+                        for (index, m) in messages.iter().enumerate() {
+                            if render_message_bubble(ui, m, &self.selected_chat) {
+                                save_index = Some(index);
+                            }
                         }
+                    }
+                    if let Some(index) = save_index {
+                        self.save_file_message(index);
                     }
                 });
 
@@ -1037,7 +1097,7 @@ fn run_send_flow(
         SendContent::Text(text) => {
             rt.block_on(core.send_text_to_peer_with_id(&auth, peer_device_uuid, text, message_id))
         }
-        SendContent::File { file_name, data } => rt.block_on(core.send_file_to_peer_with_id(
+        SendContent::File { file_name, data } => rt.block_on(core.send_file_blob_to_peer_with_id(
             &auth,
             peer_device_uuid,
             file_name,

@@ -111,6 +111,10 @@ impl CryptoEngine {
     }
 
     pub fn encrypt_text_to_b64(&self, key_b64: &str, plaintext: &str) -> Result<String> {
+        self.encrypt_bytes_to_b64(key_b64, plaintext.as_bytes())
+    }
+
+    pub fn encrypt_bytes_to_b64(&self, key_b64: &str, plaintext: &[u8]) -> Result<String> {
         let key = decode_key(key_b64)?;
         let cipher = XChaCha20Poly1305::new(GenericArray::from_slice(&key));
         let mut nonce_bytes = [0_u8; 24];
@@ -118,13 +122,18 @@ impl CryptoEngine {
         let nonce = XNonce::from_slice(&nonce_bytes);
         let mut out = nonce_bytes.to_vec();
         let ciphertext = cipher
-            .encrypt(nonce, plaintext.as_bytes())
+            .encrypt(nonce, plaintext)
             .map_err(|_| anyhow!("encryption failed"))?;
         out.extend_from_slice(&ciphertext);
         Ok(STANDARD.encode(out))
     }
 
     pub fn decrypt_text_from_b64(&self, key_b64: &str, envelope_b64: &str) -> Result<String> {
+        let plaintext = self.decrypt_bytes_from_b64(key_b64, envelope_b64)?;
+        Ok(String::from_utf8(plaintext).map_err(|_| anyhow!("invalid utf8 payload"))?)
+    }
+
+    pub fn decrypt_bytes_from_b64(&self, key_b64: &str, envelope_b64: &str) -> Result<Vec<u8>> {
         let key = decode_key(key_b64)?;
         let cipher = XChaCha20Poly1305::new(GenericArray::from_slice(&key));
         let envelope = STANDARD
@@ -138,7 +147,7 @@ impl CryptoEngine {
         let plaintext = cipher
             .decrypt(nonce, ciphertext)
             .map_err(|_| anyhow!("decryption failed"))?;
-        Ok(String::from_utf8(plaintext).map_err(|_| anyhow!("invalid utf8 payload"))?)
+        Ok(plaintext)
     }
 
     pub fn ratchet_step_b64(&self, chain_key_b64: &str) -> Result<(String, String)> {

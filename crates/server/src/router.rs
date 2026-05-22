@@ -5,7 +5,7 @@ use axum::{
 
 use crate::{
     app_state::AppState,
-    handlers::{device, health, messaging, user, ws},
+    handlers::{blob, device, health, messaging, user, ws},
 };
 
 pub fn build_router(app_state: AppState) -> Router {
@@ -29,5 +29,7 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/fetch_pending", post(messaging::fetch_pending))
         .route("/v1/ack_message", post(messaging::ack_message))
         .route("/v1/message_status", post(messaging::message_status))
+        .route("/v1/upload_blob", post(blob::upload_blob))
+        .route("/v1/fetch_blob", post(blob::fetch_blob))
         .with_state(app_state)
 }

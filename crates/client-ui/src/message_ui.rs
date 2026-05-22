@@ -2,7 +2,8 @@ use eframe::egui;
 
 use crate::history::{ChatMessage, MessageStatus};
 
-pub fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &str) {
+pub fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &str) -> bool {
+    let mut save_clicked = false;
     let bubble_color = if message.outgoing {
         egui::Color32::from_rgb(56, 120, 255)
     } else {
@@ -33,17 +34,32 @@ pub fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &st
     if message.outgoing {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
             frame.show(ui, |ui| {
-                render_bubble_content(ui, message, &meta, &display_text, text_color, bubble_width)
+                save_clicked = render_bubble_content(
+                    ui,
+                    message,
+                    &meta,
+                    &display_text,
+                    text_color,
+                    bubble_width,
+                )
             });
         });
     } else {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
             frame.show(ui, |ui| {
-                render_bubble_content(ui, message, &meta, &display_text, text_color, bubble_width)
+                save_clicked = render_bubble_content(
+                    ui,
+                    message,
+                    &meta,
+                    &display_text,
+                    text_color,
+                    bubble_width,
+                )
             });
         });
     }
     ui.add_space(6.0);
+    save_clicked
 }
 
 fn render_bubble_content(
@@ -53,30 +69,22 @@ fn render_bubble_content(
     text: &str,
     text_color: egui::Color32,
     width: f32,
-) {
+) -> bool {
     ui.set_width(width);
     ui.add(egui::Label::new(egui::RichText::new(meta).small().color(text_color)).wrap());
     ui.add(egui::Label::new(egui::RichText::new(text).color(text_color)).wrap());
-    if let (Some(file_name), Some(file_size), Some(data_b64)) = (
-        &message.file_name,
-        message.file_size,
-        &message.file_data_b64,
-    ) {
+    let mut save_clicked = false;
+    if let (Some(_file_name), Some(file_size)) = (&message.file_name, message.file_size) {
         ui.label(
             egui::RichText::new(format_file_size(file_size))
                 .small()
                 .color(text_color),
         );
         if ui.button("Save").clicked() {
-            if let Some(path) = rfd::FileDialog::new().set_file_name(file_name).save_file() {
-                if let Ok(data) =
-                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_b64)
-                {
-                    let _ = std::fs::write(path, data);
-                }
-            }
+            save_clicked = true;
         }
     }
+    save_clicked
 }
 
 fn format_file_size(bytes: u64) -> String {

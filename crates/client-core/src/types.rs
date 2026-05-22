@@ -75,7 +75,12 @@ pub enum EncryptedMessagePayload {
         v: u8,
         file_name: String,
         file_size: u64,
-        data_b64: String,
+        #[serde(default)]
+        data_b64: Option<String>,
+        #[serde(default)]
+        blob_id: Option<String>,
+        #[serde(default)]
+        file_key_b64: Option<String>,
     },
 }
 

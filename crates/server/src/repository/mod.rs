@@ -1,4 +1,5 @@
 pub mod auth_tokens;
+pub mod blobs;
 pub mod devices;
 pub mod messages;
 pub mod prekeys;

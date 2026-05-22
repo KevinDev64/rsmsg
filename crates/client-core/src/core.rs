@@ -285,11 +285,51 @@ impl ClientCore {
             v: 1,
             file_name,
             file_size: data.len() as u64,
-            data_b64: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
+            data_b64: Some(base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                data,
+            )),
+            blob_id: None,
+            file_key_b64: None,
         };
         let plaintext = serde_json::to_string(&payload)?;
         self.send_text_to_peer_with_id(auth, peer_device_uuid, plaintext, message_id)
             .await
+    }
+
+    pub async fn send_file_blob_to_peer_with_id(
+        &self,
+        auth: &DeviceAuth,
+        peer_device_uuid: String,
+        file_name: String,
+        data: Vec<u8>,
+        message_id: String,
+    ) -> Result<bool> {
+        let file_key_b64 = self.crypto.generate_shared_key_b64();
+        let encrypted_blob_b64 = self.crypto.encrypt_bytes_to_b64(&file_key_b64, &data)?;
+        let uploaded = self.transport.upload_blob(auth, encrypted_blob_b64).await?;
+        let payload = EncryptedMessagePayload::File {
+            v: 2,
+            file_name,
+            file_size: data.len() as u64,
+            data_b64: None,
+            blob_id: Some(uploaded.blob_id),
+            file_key_b64: Some(file_key_b64),
+        };
+        let plaintext = serde_json::to_string(&payload)?;
+        self.send_text_to_peer_with_id(auth, peer_device_uuid, plaintext, message_id)
+            .await
+    }
+
+    pub async fn fetch_file_blob(
+        &self,
+        auth: &DeviceAuth,
+        blob_id: String,
+        file_key_b64: String,
+    ) -> Result<Vec<u8>> {
+        let blob = self.transport.fetch_blob(auth, blob_id).await?;
+        self.crypto
+            .decrypt_bytes_from_b64(&file_key_b64, &blob.data_b64)
     }
 
     pub fn has_peer_session(&self, peer_device_uuid: &str) -> bool {

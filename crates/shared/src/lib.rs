@@ -124,6 +124,26 @@ pub struct MessageStatusResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadBlobRequest {
+    pub data_b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadBlobResponse {
+    pub blob_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchBlobRequest {
+    pub blob_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchBlobResponse {
+    pub data_b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceLogoutRequest {
     pub device_uuid: String,
 }
