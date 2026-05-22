@@ -297,13 +297,21 @@ impl MessengerApp {
             return None;
         };
 
+        let known_uuid = self.history.device_uuid_by_peer.get(&peer).cloned();
+        if known_uuid.as_deref() == Some(resolved_uuid.as_str())
+            && self.core.has_peer_session(&resolved_uuid)
+        {
+            return Some(resolved_uuid);
+        }
+
         let derive = rt.block_on(self.core.derive_peer_shared_key(
             self.local_keys.as_ref().expect("local keys"),
             peer.clone(),
             DEFAULT_DEVICE_ID.to_string(),
         ));
         let Ok((_key, bundle)) = derive else {
-            self.status = "Could not prepare peer session".to_string();
+            let err = derive.err().map(|err| err.to_string()).unwrap_or_default();
+            self.status = format!("Could not prepare peer session: {err}");
             return None;
         };
         if bundle.device_uuid != resolved_uuid {
