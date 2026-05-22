@@ -240,13 +240,7 @@ impl MessengerApp {
             self.status = "Select chat first".to_string();
             return;
         }
-        let Some(peer_device_uuid) = self
-            .history
-            .device_uuid_by_peer
-            .get(&self.selected_chat)
-            .cloned()
-        else {
-            self.status = "Peer device is unknown. Re-open chat.".to_string();
+        let Some(peer_device_uuid) = self.ensure_selected_chat_session() else {
             return;
         };
         if self.message_input.trim().is_empty() {
@@ -278,6 +272,57 @@ impl MessengerApp {
             Ok(false) => self.status = "Peer session missing. Re-open chat.".to_string(),
             Err(err) => self.status = format!("Send failed: {err}"),
         }
+    }
+
+    fn ensure_selected_chat_session(&mut self) -> Option<String> {
+        if self.selected_chat.is_empty() {
+            self.status = "Select chat first".to_string();
+            return None;
+        }
+
+        let peer = self.selected_chat.clone();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let resolved = rt.block_on(
+            self.core
+                .resolve_user_device(peer.clone(), DEFAULT_DEVICE_ID.to_string()),
+        );
+        let Ok(resolved_uuid) = resolved else {
+            self.status = "Peer not found".to_string();
+            return None;
+        };
+
+        let stored = self.history.device_uuid_by_peer.get(&peer).cloned();
+        let needs_session = stored.as_deref() != Some(resolved_uuid.as_str())
+            || !self.core.has_peer_session(&resolved_uuid);
+
+        if needs_session {
+            let derive = rt.block_on(self.core.derive_peer_shared_key(
+                &self.local_keys,
+                peer.clone(),
+                DEFAULT_DEVICE_ID.to_string(),
+            ));
+            let Ok((_key, bundle)) = derive else {
+                self.status = "Could not prepare peer session".to_string();
+                return None;
+            };
+            if bundle.device_uuid != resolved_uuid {
+                self.status = "Peer resolve mismatch, retry".to_string();
+                return None;
+            }
+            self.history
+                .peer_by_device_uuid
+                .insert(resolved_uuid.clone(), peer.clone());
+            self.history
+                .device_uuid_by_peer
+                .insert(peer.clone(), resolved_uuid.clone());
+            self.history.save();
+        }
+
+        Some(resolved_uuid)
     }
 
     fn sync_incoming(&mut self) {
