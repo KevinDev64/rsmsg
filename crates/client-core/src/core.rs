@@ -198,14 +198,9 @@ impl ClientCore {
             .transport
             .fetch_prekey_bundle(peer_user_id, peer_device_id)
             .await?;
-        let peer_pub = if let Some(one_time) = &bundle.one_time_prekey {
-            one_time.pubkey_b64.clone()
-        } else {
-            bundle.signed_prekey_b64.clone()
-        };
         let key_b64 = self
             .crypto
-            .derive_shared_key_b64(&local_keys.identity_private_b64, &peer_pub)?;
+            .derive_shared_key_b64(&local_keys.identity_private_b64, &bundle.identity_key_b64)?;
         self.peer_sessions
             .lock()
             .expect("peer_sessions")

@@ -295,32 +295,26 @@ impl MessengerApp {
             return None;
         };
 
-        let stored = self.history.device_uuid_by_peer.get(&peer).cloned();
-        let needs_session = stored.as_deref() != Some(resolved_uuid.as_str())
-            || !self.core.has_peer_session(&resolved_uuid);
-
-        if needs_session {
-            let derive = rt.block_on(self.core.derive_peer_shared_key(
-                &self.local_keys,
-                peer.clone(),
-                DEFAULT_DEVICE_ID.to_string(),
-            ));
-            let Ok((_key, bundle)) = derive else {
-                self.status = "Could not prepare peer session".to_string();
-                return None;
-            };
-            if bundle.device_uuid != resolved_uuid {
-                self.status = "Peer resolve mismatch, retry".to_string();
-                return None;
-            }
-            self.history
-                .peer_by_device_uuid
-                .insert(resolved_uuid.clone(), peer.clone());
-            self.history
-                .device_uuid_by_peer
-                .insert(peer.clone(), resolved_uuid.clone());
-            self.history.save();
+        let derive = rt.block_on(self.core.derive_peer_shared_key(
+            &self.local_keys,
+            peer.clone(),
+            DEFAULT_DEVICE_ID.to_string(),
+        ));
+        let Ok((_key, bundle)) = derive else {
+            self.status = "Could not prepare peer session".to_string();
+            return None;
+        };
+        if bundle.device_uuid != resolved_uuid {
+            self.status = "Peer resolve mismatch, retry".to_string();
+            return None;
         }
+        self.history
+            .peer_by_device_uuid
+            .insert(resolved_uuid.clone(), peer.clone());
+        self.history
+            .device_uuid_by_peer
+            .insert(peer.clone(), resolved_uuid.clone());
+        self.history.save();
 
         Some(resolved_uuid)
     }
@@ -337,6 +331,15 @@ impl MessengerApp {
         let Ok(pending) = pending else {
             return;
         };
+        for item in &pending {
+            if let Some(peer) = self.history.peer_by_device_uuid.get(&item.from_device_uuid) {
+                let _ = rt.block_on(self.core.derive_peer_shared_key(
+                    &self.local_keys,
+                    peer.clone(),
+                    DEFAULT_DEVICE_ID.to_string(),
+                ));
+            }
+        }
         let (decrypted, ack_ids) = self.core.decrypt_pending_with_sessions(pending);
         if !ack_ids.is_empty() {
             let _ = rt.block_on(self.core.ack_messages(&auth, ack_ids));
