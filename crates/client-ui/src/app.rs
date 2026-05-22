@@ -892,10 +892,14 @@ impl eframe::App for MessengerApp {
                     format!("@{nick}")
                 };
                 if ui.selectable_label(selected, label).clicked() {
-                    self.selected_chat = nick.clone();
-                    if let Some(auth) = self.auth.clone() {
-                        let rt = runtime();
-                        self.mark_selected_chat_read(&rt, &auth);
+                    if selected {
+                        self.selected_chat.clear();
+                    } else {
+                        self.selected_chat = nick.clone();
+                        if let Some(auth) = self.auth.clone() {
+                            let rt = runtime();
+                            self.mark_selected_chat_read(&rt, &auth);
+                        }
                     }
                     self.save_history();
                 }
@@ -915,7 +919,9 @@ impl eframe::App for MessengerApp {
             }
 
             if self.selected_chat.is_empty() {
-                ui.heading("Select or create a chat");
+                ui.centered_and_justified(|ui| {
+                    ui.heading("Select or start chat");
+                });
                 return;
             }
 
