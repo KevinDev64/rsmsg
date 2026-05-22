@@ -474,19 +474,29 @@ impl eframe::App for MessengerApp {
             ui.heading(format!("Chat with @{}", self.selected_chat));
             ui.separator();
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                if let Some(messages) = self.history.chats.get(&self.selected_chat) {
-                    for m in messages {
-                        render_message_bubble(ui, m, &self.selected_chat);
+            let composer_height = 96.0;
+            let history_height = (ui.available_height() - composer_height).max(120.0);
+            egui::ScrollArea::vertical()
+                .stick_to_bottom(true)
+                .max_height(history_height)
+                .show(ui, |ui| {
+                    if let Some(messages) = self.history.chats.get(&self.selected_chat) {
+                        for m in messages {
+                            render_message_bubble(ui, m, &self.selected_chat);
+                        }
                     }
-                }
-            });
+                });
 
             ui.separator();
-            ui.text_edit_multiline(&mut self.message_input);
-            if ui.button("Send").clicked() {
-                self.send_current_message();
-            }
+            ui.add_sized(
+                [ui.available_width(), 56.0],
+                egui::TextEdit::multiline(&mut self.message_input).hint_text("Message"),
+            );
+            ui.horizontal(|ui| {
+                if ui.button("Send").clicked() {
+                    self.send_current_message();
+                }
+            });
         });
     }
 }
@@ -512,21 +522,35 @@ fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &str) {
     if message.outgoing {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
             frame.show(ui, |ui| {
-                ui.set_max_width(max_width);
-                ui.label(egui::RichText::new(&meta).small().color(text_color));
-                ui.label(egui::RichText::new(&message.text).color(text_color));
+                render_bubble_content(ui, &meta, &message.text, text_color, max_width)
             });
         });
     } else {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
             frame.show(ui, |ui| {
-                ui.set_max_width(max_width);
-                ui.label(egui::RichText::new(&meta).small().color(text_color));
-                ui.label(egui::RichText::new(&message.text).color(text_color));
+                render_bubble_content(ui, &meta, &message.text, text_color, max_width)
             });
         });
     }
     ui.add_space(6.0);
+}
+
+fn render_bubble_content(
+    ui: &mut egui::Ui,
+    meta: &str,
+    text: &str,
+    text_color: egui::Color32,
+    max_width: f32,
+) {
+    ui.set_max_width(max_width);
+    ui.add_sized(
+        [max_width, 0.0],
+        egui::Label::new(egui::RichText::new(meta).small().color(text_color)).wrap(),
+    );
+    ui.add_sized(
+        [max_width, 0.0],
+        egui::Label::new(egui::RichText::new(text).color(text_color)).wrap(),
+    );
 }
 
 fn chrono_like_now_ms() -> i64 {
