@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use server::{app_state::AppState, login_rate_limit::LoginRateLimiter, router::build_router};
+use server::{
+    app_state::AppState, login_rate_limit::LoginRateLimiter, router::build_router,
+    services::stats::spawn_stats_logger,
+};
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -19,9 +22,10 @@ async fn main() -> Result<()> {
         .context("failed to connect to postgres")?;
 
     let app_state = AppState {
-        db,
+        db: db.clone(),
         login_rate_limiter: LoginRateLimiter::new(),
     };
+    spawn_stats_logger(db);
     let app = build_router(app_state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
