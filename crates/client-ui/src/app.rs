@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    path::PathBuf,
     sync::mpsc::{self, Receiver},
     thread,
     time::{Duration, Instant},
@@ -41,8 +42,12 @@ pub struct MessengerApp {
     key_change_peer: Option<String>,
     login_rx: Option<Receiver<LoginResult>>,
     open_chat_rx: Option<Receiver<OpenChatResult>>,
+    search_rx: Option<Receiver<SearchResult>>,
     send_rx: Option<Receiver<SendResult>>,
     sync_rx: Option<Receiver<SyncResult>>,
+    read_ack_rx: Option<Receiver<ReadAckResult>>,
+    save_file_rx: Option<Receiver<SaveFileResult>>,
+    trust_rx: Option<Receiver<TrustResult>>,
     last_sync_at: Instant,
 }
 
@@ -69,6 +74,10 @@ struct OpenChatSuccess {
     bundle: FetchPrekeyBundleResponse,
 }
 
+struct SearchResult {
+    result: Result<Vec<String>, String>,
+}
+
 struct SendResult {
     chat_name: String,
     message_index: usize,
@@ -77,7 +86,7 @@ struct SendResult {
 
 enum SendContent {
     Text(String),
-    File { file_name: String, data: Vec<u8> },
+    File { file_name: String, path: PathBuf },
 }
 
 struct SyncResult {
@@ -94,6 +103,22 @@ struct PeerMapping {
     device_uuid: String,
     peer: String,
     bundle: FetchPrekeyBundleResponse,
+}
+
+struct ReadAckResult {
+    chat_name: String,
+    message_ids: Vec<String>,
+    result: Result<(), String>,
+}
+
+struct SaveFileResult {
+    file_name: String,
+    result: Result<(), String>,
+}
+
+struct TrustResult {
+    peer: String,
+    result: Result<FetchPrekeyBundleResponse, String>,
 }
 
 impl MessengerApp {
@@ -121,8 +146,12 @@ impl MessengerApp {
             key_change_peer: None,
             login_rx: None,
             open_chat_rx: None,
+            search_rx: None,
             send_rx: None,
             sync_rx: None,
+            read_ack_rx: None,
+            save_file_rx: None,
+            trust_rx: None,
             last_sync_at: Instant::now(),
         }
     }
@@ -189,8 +218,11 @@ impl MessengerApp {
 
     fn logout(&mut self) {
         if let Some(auth) = self.auth.clone() {
-            let rt = runtime();
-            let _ = rt.block_on(self.core.logout_device(&auth));
+            let core = self.core.clone();
+            thread::spawn(move || {
+                let rt = runtime();
+                let _ = rt.block_on(core.logout_device(&auth));
+            });
         }
         self.auth = None;
         self.local_keys = None;
@@ -259,30 +291,55 @@ impl MessengerApp {
             .device_uuid_by_peer
             .insert(success.peer.clone(), success.resolved_uuid);
         if let Some(auth) = self.auth.clone() {
-            let rt = runtime();
-            self.mark_selected_chat_read(&rt, &auth);
+            self.mark_selected_chat_read(auth);
         }
         self.save_history();
         self.status = format!("Chat with @{} ready", success.peer);
     }
 
     fn search_users(&mut self) {
+        if self.search_rx.is_some() {
+            return;
+        }
         if self.auth.is_none() {
             self.status = "Log in first".to_string();
             self.peer_search_results.clear();
             return;
         }
-        let rt = runtime();
-        match rt.block_on(self.core.search_users(self.peer_nickname_input.clone())) {
-            Ok(users) => {
-                self.peer_search_results = users;
-                if self.peer_search_results.is_empty() {
-                    self.status = "No users found".to_string();
-                } else {
-                    self.status = format!("Found {} users", self.peer_search_results.len());
+        let query = self.peer_nickname_input.clone();
+        let core = self.core.clone();
+        let (tx, rx) = mpsc::channel();
+        self.search_rx = Some(rx);
+        self.status = "Searching users...".to_string();
+        thread::spawn(move || {
+            let rt = runtime();
+            let result = rt
+                .block_on(core.search_users(query))
+                .map_err(|err| format!("Search failed: {err}"));
+            let _ = tx.send(SearchResult { result });
+        });
+    }
+
+    fn poll_search_result(&mut self) {
+        let Some(rx) = self.search_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(search) => match search.result {
+                Ok(users) => {
+                    self.peer_search_results = users;
+                    if self.peer_search_results.is_empty() {
+                        self.status = "No users found".to_string();
+                    } else {
+                        self.status = format!("Found {} users", self.peer_search_results.len());
+                    }
                 }
+                Err(err) => self.status = err,
+            },
+            Err(mpsc::TryRecvError::Empty) => self.search_rx = Some(rx),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Search worker stopped".to_string();
             }
-            Err(err) => self.status = format!("Search failed: {err}"),
         }
     }
 
@@ -298,7 +355,7 @@ impl MessengerApp {
             self.status = "Select chat first".to_string();
             return;
         }
-        let Some(peer_device_uuid) = self.ensure_selected_chat_session() else {
+        let Some(peer_device_uuid) = self.selected_chat_session() else {
             return;
         };
         if self.message_input.trim().is_empty() {
@@ -357,17 +414,17 @@ impl MessengerApp {
             self.status = "Select chat first".to_string();
             return;
         }
-        let Some(peer_device_uuid) = self.ensure_selected_chat_session() else {
+        let Some(peer_device_uuid) = self.selected_chat_session() else {
             return;
         };
         let Some(path) = rfd::FileDialog::new().pick_file() else {
             return;
         };
-        let Ok(data) = std::fs::read(&path) else {
-            self.status = "Could not read selected file".to_string();
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            self.status = "Could not inspect selected file".to_string();
             return;
         };
-        if data.len() > MAX_FILE_BYTES {
+        if metadata.len() > MAX_FILE_BYTES as u64 {
             self.status = "File is too large. Limit is 100 MB".to_string();
             return;
         }
@@ -387,11 +444,8 @@ impl MessengerApp {
                 status: MessageStatus::Sending,
                 message_id: Some(message_id.clone()),
                 file_name: Some(file_name.clone()),
-                file_size: Some(data.len() as u64),
-                file_data_b64: Some(base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    &data,
-                )),
+                file_size: Some(metadata.len()),
+                file_data_b64: None,
                 blob_id: None,
                 file_key_b64: None,
             });
@@ -407,7 +461,7 @@ impl MessengerApp {
                 core,
                 auth,
                 peer_device_uuid,
-                SendContent::File { file_name, data },
+                SendContent::File { file_name, path },
                 message_id,
             );
             let _ = tx.send(SendResult {
@@ -419,6 +473,9 @@ impl MessengerApp {
     }
 
     fn save_file_message(&mut self, index: usize) {
+        if self.save_file_rx.is_some() {
+            return;
+        }
         let Some(auth) = self.auth.clone() else {
             return;
         };
@@ -438,28 +495,34 @@ impl MessengerApp {
             return;
         };
         if let Some(data_b64) = message.file_data_b64 {
-            if let Ok(data) =
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_b64)
-            {
-                let _ = std::fs::write(path, data);
-            }
+            let (tx, rx) = mpsc::channel();
+            self.save_file_rx = Some(rx);
+            self.status = format!("Saving {file_name}...");
+            thread::spawn(move || {
+                let result =
+                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_b64)
+                        .map_err(|err| format!("Could not decode file: {err}"))
+                        .and_then(|data| {
+                            std::fs::write(path, data)
+                                .map_err(|err| format!("Could not save file: {err}"))
+                        });
+                let _ = tx.send(SaveFileResult { file_name, result });
+            });
             return;
         }
         let (Some(blob_id), Some(file_key_b64)) = (message.blob_id, message.file_key_b64) else {
             self.status = "File data is unavailable".to_string();
             return;
         };
-        let rt = runtime();
-        match rt.block_on(self.core.fetch_file_blob(&auth, blob_id, file_key_b64)) {
-            Ok(data) => {
-                if std::fs::write(path, data).is_ok() {
-                    self.status = format!("Saved {file_name}");
-                } else {
-                    self.status = "Could not save file".to_string();
-                }
-            }
-            Err(err) => self.status = format!("Could not fetch file: {err}"),
-        }
+        let core = self.core.clone();
+        let (tx, rx) = mpsc::channel();
+        self.save_file_rx = Some(rx);
+        self.status = format!("Saving {file_name}...");
+        thread::spawn(move || {
+            let result = run_save_file_flow(core, auth, blob_id, file_key_b64, path)
+                .map_err(|err| format!("Could not save file: {err}"));
+            let _ = tx.send(SaveFileResult { file_name, result });
+        });
     }
 
     fn poll_send_result(&mut self) {
@@ -495,6 +558,22 @@ impl MessengerApp {
         }
     }
 
+    fn poll_save_file_result(&mut self) {
+        let Some(rx) = self.save_file_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(saved) => match saved.result {
+                Ok(()) => self.status = format!("Saved {}", saved.file_name),
+                Err(err) => self.status = err,
+            },
+            Err(mpsc::TryRecvError::Empty) => self.save_file_rx = Some(rx),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Save worker stopped".to_string();
+            }
+        }
+    }
+
     fn update_message_status(&mut self, chat_name: &str, index: usize, status: MessageStatus) {
         if let Some(message) = self
             .history
@@ -506,57 +585,24 @@ impl MessengerApp {
         }
     }
 
-    fn ensure_selected_chat_session(&mut self) -> Option<String> {
+    fn selected_chat_session(&mut self) -> Option<String> {
         if self.selected_chat.is_empty() {
             self.status = "Select chat first".to_string();
             return None;
         }
 
-        let peer = self.selected_chat.clone();
-        let rt = runtime();
-
-        let known_uuid = self.history.device_uuid_by_peer.get(&peer).cloned();
+        let known_uuid = self
+            .history
+            .device_uuid_by_peer
+            .get(&self.selected_chat)
+            .cloned();
         if let Some(known_uuid) = known_uuid {
             if self.core.has_peer_session(&known_uuid) {
                 return Some(known_uuid);
             }
         }
-
-        let resolved = rt.block_on(
-            self.core
-                .resolve_user_device(peer.clone(), DEFAULT_DEVICE_ID.to_string()),
-        );
-        let Ok(resolved_uuid) = resolved else {
-            self.status = "Peer not found".to_string();
-            return None;
-        };
-
-        let derive = rt.block_on(self.core.derive_peer_shared_key(
-            self.local_keys.as_ref().expect("local keys"),
-            peer.clone(),
-            DEFAULT_DEVICE_ID.to_string(),
-        ));
-        let Ok((_key, bundle)) = derive else {
-            let err = derive.err().map(|err| err.to_string()).unwrap_or_default();
-            self.status = format!("Could not prepare peer session: {err}");
-            return None;
-        };
-        if bundle.device_uuid != resolved_uuid {
-            self.status = "Peer resolve mismatch, retry".to_string();
-            return None;
-        }
-        if !self.verify_or_pin_peer_identity(&peer, &bundle) {
-            return None;
-        }
-        self.history
-            .peer_by_device_uuid
-            .insert(resolved_uuid.clone(), peer.clone());
-        self.history
-            .device_uuid_by_peer
-            .insert(peer.clone(), resolved_uuid.clone());
-        self.save_history();
-
-        Some(resolved_uuid)
+        self.status = "Re-open chat before sending".to_string();
+        None
     }
 
     fn sync_incoming(&mut self) {
@@ -620,16 +666,19 @@ impl MessengerApp {
         }
         self.apply_outgoing_statuses(success.statuses);
         if let Some(auth) = self.auth.clone() {
-            let rt = runtime();
-            self.mark_selected_chat_read(&rt, &auth);
+            self.mark_selected_chat_read(auth);
         }
         self.save_history();
     }
 
-    fn mark_selected_chat_read(&mut self, rt: &tokio::runtime::Runtime, auth: &DeviceAuth) {
+    fn mark_selected_chat_read(&mut self, auth: DeviceAuth) {
+        if self.read_ack_rx.is_some() {
+            return;
+        }
         if self.selected_chat.is_empty() {
             return;
         }
+        let chat_name = self.selected_chat.clone();
         let Some(messages) = self.history.chats.get_mut(&self.selected_chat) else {
             return;
         };
@@ -642,16 +691,56 @@ impl MessengerApp {
             self.history.unread_by_peer.remove(&self.selected_chat);
             return;
         }
-        if rt
-            .block_on(self.core.ack_messages(auth, message_ids))
-            .is_ok()
-        {
-            for message in messages {
-                if !message.outgoing {
-                    message.status = MessageStatus::Read;
+        for message in messages {
+            if !message.outgoing {
+                message.status = MessageStatus::Read;
+            }
+        }
+        self.history.unread_by_peer.remove(&self.selected_chat);
+        let core = self.core.clone();
+        let ack_ids = message_ids.clone();
+        let (tx, rx) = mpsc::channel();
+        self.read_ack_rx = Some(rx);
+        thread::spawn(move || {
+            let rt = runtime();
+            let result = rt
+                .block_on(core.ack_messages(&auth, ack_ids))
+                .map_err(|err| format!("Read ack failed: {err}"));
+            let _ = tx.send(ReadAckResult {
+                chat_name,
+                message_ids,
+                result,
+            });
+        });
+    }
+
+    fn poll_read_ack_result(&mut self) {
+        let Some(rx) = self.read_ack_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(ack) => {
+                if ack.result.is_err() {
+                    if let Some(messages) = self.history.chats.get_mut(&ack.chat_name) {
+                        for message in messages {
+                            if message
+                                .message_id
+                                .as_deref()
+                                .is_some_and(|id| ack.message_ids.iter().any(|ack_id| ack_id == id))
+                            {
+                                message.status = MessageStatus::Delivered;
+                            }
+                        }
+                    }
+                    *self
+                        .history
+                        .unread_by_peer
+                        .entry(ack.chat_name)
+                        .or_default() += ack.message_ids.len() as u32;
                 }
             }
-            self.history.unread_by_peer.remove(&self.selected_chat);
+            Err(mpsc::TryRecvError::Empty) => self.read_ack_rx = Some(rx),
+            Err(mpsc::TryRecvError::Disconnected) => {}
         }
     }
 
@@ -714,27 +803,62 @@ impl MessengerApp {
     }
 
     fn trust_new_peer_identity(&mut self) {
+        if self.trust_rx.is_some() {
+            return;
+        }
         let Some(peer) = self.key_change_peer.clone() else {
             return;
         };
-        let rt = runtime();
-        let Ok((_key, bundle)) = rt.block_on(self.core.derive_peer_shared_key(
-            self.local_keys.as_ref().expect("local keys"),
-            peer.clone(),
-            DEFAULT_DEVICE_ID.to_string(),
-        )) else {
-            self.status = format!("Could not refresh @{peer} identity");
+        let Some(local_keys) = self.local_keys.clone() else {
+            self.status = "Log in first".to_string();
             return;
         };
-        self.history
-            .peer_identity_key_by_peer
-            .insert(peer.clone(), bundle.identity_key_b64);
-        self.history
-            .peer_signing_identity_key_by_peer
-            .insert(peer.clone(), bundle.signing_identity_key_b64);
-        self.key_change_peer = None;
-        self.save_history();
-        self.status = format!("Trusted new identity for @{peer}");
+        let core = self.core.clone();
+        let trust_peer = peer.clone();
+        let (tx, rx) = mpsc::channel();
+        self.trust_rx = Some(rx);
+        self.status = format!("Refreshing @{peer} identity...");
+        thread::spawn(move || {
+            let rt = runtime();
+            let result = rt
+                .block_on(core.derive_peer_shared_key(
+                    &local_keys,
+                    trust_peer.clone(),
+                    DEFAULT_DEVICE_ID.to_string(),
+                ))
+                .map(|(_key, bundle)| bundle)
+                .map_err(|err| format!("Could not refresh @{trust_peer} identity: {err}"));
+            let _ = tx.send(TrustResult {
+                peer: trust_peer,
+                result,
+            });
+        });
+    }
+
+    fn poll_trust_result(&mut self) {
+        let Some(rx) = self.trust_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(trust) => match trust.result {
+                Ok(bundle) => {
+                    self.history
+                        .peer_identity_key_by_peer
+                        .insert(trust.peer.clone(), bundle.identity_key_b64);
+                    self.history
+                        .peer_signing_identity_key_by_peer
+                        .insert(trust.peer.clone(), bundle.signing_identity_key_b64);
+                    self.key_change_peer = None;
+                    self.save_history();
+                    self.status = format!("Trusted new identity for @{}", trust.peer);
+                }
+                Err(err) => self.status = err,
+            },
+            Err(mpsc::TryRecvError::Empty) => self.trust_rx = Some(rx),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Trust worker stopped".to_string();
+            }
+        }
     }
 
     fn save_history(&self) {
@@ -804,8 +928,12 @@ impl eframe::App for MessengerApp {
         self.apply_theme(ctx);
         self.poll_login_result();
         self.poll_open_chat_result();
+        self.poll_search_result();
         self.poll_send_result();
         self.poll_sync_result();
+        self.poll_read_ack_result();
+        self.poll_save_file_result();
+        self.poll_trust_result();
         ctx.request_repaint_after(Duration::from_millis(800));
         if self.auth.is_some() && self.last_sync_at.elapsed() >= Duration::from_secs(2) {
             self.sync_incoming();
@@ -885,8 +1013,9 @@ impl eframe::App for MessengerApp {
                 [160.0, 22.0],
                 egui::TextEdit::singleline(&mut self.peer_nickname_input).interactive(logged_in),
             );
+            let search_busy = self.search_rx.is_some();
             if ui
-                .add_enabled(logged_in, egui::Button::new("Search users"))
+                .add_enabled(logged_in && !search_busy, egui::Button::new("Search users"))
                 .clicked()
             {
                 self.search_users();
@@ -920,8 +1049,7 @@ impl eframe::App for MessengerApp {
                     } else {
                         self.selected_chat = nick.clone();
                         if let Some(auth) = self.auth.clone() {
-                            let rt = runtime();
-                            self.mark_selected_chat_read(&rt, &auth);
+                            self.mark_selected_chat_read(auth);
                         }
                     }
                     self.save_history();
@@ -980,7 +1108,12 @@ impl eframe::App for MessengerApp {
                 egui::TextEdit::multiline(&mut self.message_input).hint_text("Message"),
             );
             let send_by_enter = response.has_focus()
-                && ui.input(|input| input.key_pressed(egui::Key::Enter) && !input.modifiers.shift);
+                && ui.input(|input| {
+                    input.key_pressed(egui::Key::Enter)
+                        && !input.modifiers.shift
+                        && !input.modifiers.ctrl
+                        && !input.modifiers.command
+                });
             if send_by_enter {
                 while self.message_input.ends_with(['\n', '\r']) {
                     self.message_input.pop();
@@ -1209,19 +1342,39 @@ fn run_send_flow(
         SendContent::Text(text) => {
             rt.block_on(core.send_text_to_peer_with_id(&auth, peer_device_uuid, text, message_id))
         }
-        SendContent::File { file_name, data } => rt.block_on(core.send_file_blob_to_peer_with_id(
-            &auth,
-            peer_device_uuid,
-            file_name,
-            data,
-            message_id,
-        )),
+        SendContent::File { file_name, path } => {
+            let data = std::fs::read(path).map_err(|err| format!("File read failed: {err}"))?;
+            if data.len() > MAX_FILE_BYTES {
+                return Err("File is too large. Limit is 100 MB".to_string());
+            }
+            rt.block_on(core.send_file_blob_to_peer_with_id(
+                &auth,
+                peer_device_uuid,
+                file_name,
+                data,
+                message_id,
+            ))
+        }
     };
     match sent {
         Ok(true) => Ok(()),
         Ok(false) => Err("Peer session missing. Re-open chat.".to_string()),
         Err(err) => Err(format!("Send failed: {err}")),
     }
+}
+
+fn run_save_file_flow(
+    core: ClientCore,
+    auth: DeviceAuth,
+    blob_id: String,
+    file_key_b64: String,
+    path: PathBuf,
+) -> Result<(), String> {
+    let rt = runtime();
+    let data = rt
+        .block_on(core.fetch_file_blob(&auth, blob_id, file_key_b64))
+        .map_err(|err| format!("fetch failed: {err}"))?;
+    std::fs::write(path, data).map_err(|err| format!("write failed: {err}"))
 }
 
 fn run_sync_flow(
