@@ -192,6 +192,13 @@ impl MessengerApp {
     }
 
     fn logout(&mut self) {
+        if let Some(auth) = self.auth.clone() {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            let _ = rt.block_on(self.core.logout_device(&auth));
+        }
         self.auth = None;
         self.password.clear();
         self.status = "Logged out".to_string();
@@ -470,7 +477,16 @@ impl eframe::App for MessengerApp {
             ui.heading("Account");
             if self.auth.is_some() {
                 ui.label(format!("@{}", self.nickname));
-                ui.label(&self.server_input);
+                ui.collapsing("Settings", |ui| {
+                    ui.label("Server");
+                    ui.text_edit_singleline(&mut self.server_input);
+                    ui.label("Nickname");
+                    ui.text_edit_singleline(&mut self.nickname);
+                    if ui.button("Apply after logout").clicked() {
+                        self.logout();
+                        self.apply_server_config();
+                    }
+                });
                 if ui.button("Logout").clicked() {
                     self.logout();
                 }
