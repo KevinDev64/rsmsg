@@ -1,10 +1,13 @@
 use std::{
+    collections::BTreeMap,
     sync::mpsc::{self, Receiver},
     thread,
     time::{Duration, Instant},
 };
 
-use client_core::{ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, LocalDeviceKeys};
+use client_core::{
+    ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, LocalDeviceKeys, OutgoingMessageStatus,
+};
 use eframe::egui;
 use shared::FetchPrekeyBundleResponse;
 use uuid::Uuid;
@@ -33,6 +36,7 @@ pub struct MessengerApp {
     login_rx: Option<Receiver<LoginResult>>,
     open_chat_rx: Option<Receiver<OpenChatResult>>,
     send_rx: Option<Receiver<SendResult>>,
+    sync_rx: Option<Receiver<SyncResult>>,
     last_sync_at: Instant,
 }
 
@@ -65,6 +69,22 @@ struct SendResult {
     result: Result<(), String>,
 }
 
+struct SyncResult {
+    result: Result<SyncSuccess, String>,
+}
+
+struct SyncSuccess {
+    peer_mappings: Vec<PeerMapping>,
+    decrypted: Vec<DecryptedMessage>,
+    statuses: Vec<OutgoingMessageStatus>,
+}
+
+struct PeerMapping {
+    device_uuid: String,
+    peer: String,
+    bundle: FetchPrekeyBundleResponse,
+}
+
 impl MessengerApp {
     pub fn new() -> Self {
         let config = ClientConfig::local_default();
@@ -87,6 +107,7 @@ impl MessengerApp {
             login_rx: None,
             open_chat_rx: None,
             send_rx: None,
+            sync_rx: None,
             last_sync_at: Instant::now(),
         }
     }
@@ -387,49 +408,70 @@ impl MessengerApp {
     }
 
     fn sync_incoming(&mut self) {
+        if self.sync_rx.is_some() {
+            return;
+        }
         let Some(auth) = self.auth.clone() else {
             return;
         };
-        let rt = runtime();
-        let pending = rt.block_on(self.core.fetch_pending(&auth, Some(100)));
-        let Ok(pending) = pending else {
+        let Some(local_keys) = self.local_keys.clone() else {
             return;
         };
-        for item in &pending {
-            let peer =
-                if let Some(peer) = self.history.peer_by_device_uuid.get(&item.from_device_uuid) {
-                    Some(peer.clone())
-                } else {
-                    rt.block_on(self.core.resolve_device_user(item.from_device_uuid.clone()))
-                        .ok()
-                };
-            if let Some(peer) = peer {
-                if let Ok((_key, bundle)) = rt.block_on(self.core.derive_peer_shared_key(
-                    self.local_keys.as_ref().expect("local keys"),
-                    peer.clone(),
-                    DEFAULT_DEVICE_ID.to_string(),
-                )) {
-                    if !self.verify_or_pin_peer_identity(&peer, &bundle) {
-                        continue;
-                    }
-                    self.history
-                        .peer_by_device_uuid
-                        .insert(item.from_device_uuid.clone(), peer.clone());
-                    self.history
-                        .device_uuid_by_peer
-                        .insert(peer.clone(), bundle.device_uuid);
-                    self.history.chats.entry(peer).or_default();
+        let (tx, rx) = mpsc::channel();
+        self.sync_rx = Some(rx);
+        let core = self.core.clone();
+        let peer_by_device_uuid = self.history.peer_by_device_uuid.clone();
+        let outgoing_message_ids = self.outgoing_message_ids();
+        thread::spawn(move || {
+            let result = run_sync_flow(
+                core,
+                local_keys,
+                auth,
+                peer_by_device_uuid,
+                outgoing_message_ids,
+            );
+            let _ = tx.send(SyncResult { result });
+        });
+        self.last_sync_at = Instant::now();
+    }
+
+    fn poll_sync_result(&mut self) {
+        let Some(rx) = self.sync_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(sync) => {
+                if let Ok(success) = sync.result {
+                    self.apply_sync_success(success);
                 }
             }
+            Err(mpsc::TryRecvError::Empty) => self.sync_rx = Some(rx),
+            Err(mpsc::TryRecvError::Disconnected) => {}
         }
-        let (decrypted, _ack_ids) = self.core.decrypt_pending_with_sessions(pending);
-        for msg in decrypted {
+    }
+
+    fn apply_sync_success(&mut self, success: SyncSuccess) {
+        for mapping in success.peer_mappings {
+            if !self.verify_or_pin_peer_identity(&mapping.peer, &mapping.bundle) {
+                continue;
+            }
+            self.history
+                .peer_by_device_uuid
+                .insert(mapping.device_uuid.clone(), mapping.peer.clone());
+            self.history
+                .device_uuid_by_peer
+                .insert(mapping.peer.clone(), mapping.bundle.device_uuid);
+            self.history.chats.entry(mapping.peer).or_default();
+        }
+        for msg in success.decrypted {
             self.push_incoming(msg);
         }
-        self.mark_selected_chat_read(&rt, &auth);
-        self.sync_outgoing_statuses(&rt, &auth);
+        self.apply_outgoing_statuses(success.statuses);
+        if let Some(auth) = self.auth.clone() {
+            let rt = runtime();
+            self.mark_selected_chat_read(&rt, &auth);
+        }
         self.save_history();
-        self.last_sync_at = Instant::now();
     }
 
     fn mark_selected_chat_read(&mut self, rt: &tokio::runtime::Runtime, auth: &DeviceAuth) {
@@ -461,21 +503,17 @@ impl MessengerApp {
         }
     }
 
-    fn sync_outgoing_statuses(&mut self, rt: &tokio::runtime::Runtime, auth: &DeviceAuth) {
-        let message_ids: Vec<String> = self
-            .history
+    fn outgoing_message_ids(&self) -> Vec<String> {
+        self.history
             .chats
             .values()
             .flat_map(|messages| messages.iter())
             .filter(|message| message.outgoing && message.status != MessageStatus::Read)
             .filter_map(|message| message.message_id.clone())
-            .collect();
-        if message_ids.is_empty() {
-            return;
-        }
-        let Ok(statuses) = rt.block_on(self.core.message_statuses(auth, message_ids)) else {
-            return;
-        };
+            .collect()
+    }
+
+    fn apply_outgoing_statuses(&mut self, statuses: Vec<OutgoingMessageStatus>) {
         for status in statuses {
             let next = if status.read {
                 MessageStatus::Read
@@ -590,6 +628,7 @@ impl eframe::App for MessengerApp {
         self.poll_login_result();
         self.poll_open_chat_result();
         self.poll_send_result();
+        self.poll_sync_result();
         ctx.request_repaint_after(Duration::from_millis(800));
         if self.auth.is_some() && self.last_sync_at.elapsed() >= Duration::from_secs(2) {
             self.sync_incoming();
@@ -836,4 +875,53 @@ fn run_send_flow(
         Ok(false) => Err("Peer session missing. Re-open chat.".to_string()),
         Err(err) => Err(format!("Send failed: {err}")),
     }
+}
+
+fn run_sync_flow(
+    core: ClientCore,
+    local_keys: LocalDeviceKeys,
+    auth: DeviceAuth,
+    peer_by_device_uuid: BTreeMap<String, String>,
+    outgoing_message_ids: Vec<String>,
+) -> Result<SyncSuccess, String> {
+    let rt = runtime();
+    let pending = rt
+        .block_on(core.fetch_pending(&auth, Some(100)))
+        .map_err(|err| format!("Sync failed: {err}"))?;
+    let mut peer_mappings = Vec::new();
+    for item in &pending {
+        let peer = if let Some(peer) = peer_by_device_uuid.get(&item.from_device_uuid) {
+            Some(peer.clone())
+        } else {
+            rt.block_on(core.resolve_device_user(item.from_device_uuid.clone()))
+                .ok()
+        };
+        if let Some(peer) = peer {
+            if !core.has_peer_session(&item.from_device_uuid) {
+                if let Ok((_key, bundle)) = rt.block_on(core.derive_peer_shared_key(
+                    &local_keys,
+                    peer.clone(),
+                    DEFAULT_DEVICE_ID.to_string(),
+                )) {
+                    peer_mappings.push(PeerMapping {
+                        device_uuid: item.from_device_uuid.clone(),
+                        peer,
+                        bundle,
+                    });
+                }
+            }
+        }
+    }
+    let (decrypted, _ack_ids) = core.decrypt_pending_with_sessions(pending);
+    let statuses = if outgoing_message_ids.is_empty() {
+        Vec::new()
+    } else {
+        rt.block_on(core.message_statuses(&auth, outgoing_message_ids))
+            .unwrap_or_default()
+    };
+    Ok(SyncSuccess {
+        peer_mappings,
+        decrypted,
+        statuses,
+    })
 }
