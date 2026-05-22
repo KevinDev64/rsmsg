@@ -488,10 +488,18 @@ impl eframe::App for MessengerApp {
                 });
 
             ui.separator();
-            ui.add_sized(
+            let response = ui.add_sized(
                 [ui.available_width(), 56.0],
                 egui::TextEdit::multiline(&mut self.message_input).hint_text("Message"),
             );
+            let send_by_enter = response.has_focus()
+                && ui.input(|input| input.key_pressed(egui::Key::Enter) && !input.modifiers.shift);
+            if send_by_enter {
+                while self.message_input.ends_with(['\n', '\r']) {
+                    self.message_input.pop();
+                }
+                self.send_current_message();
+            }
             ui.horizontal(|ui| {
                 if ui.button("Send").clicked() {
                     self.send_current_message();
