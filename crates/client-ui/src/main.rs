@@ -33,6 +33,23 @@ struct ChatMessage {
     outgoing: bool,
     text: String,
     ts: i64,
+    #[serde(default)]
+    status: MessageStatus,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+enum MessageStatus {
+    Sending,
+    Sent,
+    Delivered,
+    Read,
+    Failed,
+}
+
+impl Default for MessageStatus {
+    fn default() -> Self {
+        Self::Sent
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -43,6 +60,8 @@ struct ChatHistory {
     peer_by_device_uuid: BTreeMap<String, String>,
     #[serde(default)]
     device_uuid_by_peer: BTreeMap<String, String>,
+    #[serde(default)]
+    unread_by_peer: BTreeMap<String, u32>,
 }
 
 impl ChatHistory {
@@ -282,6 +301,7 @@ impl MessengerApp {
                         outgoing: true,
                         text,
                         ts: chrono_like_now_ms(),
+                        status: MessageStatus::Sent,
                     });
                 self.history.save();
                 self.message_input.clear();
@@ -350,12 +370,27 @@ impl MessengerApp {
             return;
         };
         for item in &pending {
-            if let Some(peer) = self.history.peer_by_device_uuid.get(&item.from_device_uuid) {
-                let _ = rt.block_on(self.core.derive_peer_shared_key(
+            let peer =
+                if let Some(peer) = self.history.peer_by_device_uuid.get(&item.from_device_uuid) {
+                    Some(peer.clone())
+                } else {
+                    rt.block_on(self.core.resolve_device_user(item.from_device_uuid.clone()))
+                        .ok()
+                };
+            if let Some(peer) = peer {
+                if let Ok((_key, bundle)) = rt.block_on(self.core.derive_peer_shared_key(
                     &self.local_keys,
                     peer.clone(),
                     DEFAULT_DEVICE_ID.to_string(),
-                ));
+                )) {
+                    self.history
+                        .peer_by_device_uuid
+                        .insert(item.from_device_uuid.clone(), peer.clone());
+                    self.history
+                        .device_uuid_by_peer
+                        .insert(peer.clone(), bundle.device_uuid);
+                    self.history.chats.entry(peer).or_default();
+                }
             }
         }
         let (decrypted, ack_ids) = self.core.decrypt_pending_with_sessions(pending);
@@ -381,12 +416,16 @@ impl MessengerApp {
                     &msg.from_device_uuid[..8.min(msg.from_device_uuid.len())]
                 )
             });
-        let chat = self.history.chats.entry(nick).or_default();
+        let chat = self.history.chats.entry(nick.clone()).or_default();
         chat.push(ChatMessage {
             outgoing: false,
             text: msg.plaintext,
             ts: msg.created_at_unix_ms,
+            status: MessageStatus::Read,
         });
+        if self.selected_chat != nick {
+            *self.history.unread_by_peer.entry(nick).or_default() += 1;
+        }
     }
 }
 
@@ -448,8 +487,16 @@ impl eframe::App for MessengerApp {
             ui.heading("Chats");
             for nick in self.history.chats.keys() {
                 let selected = self.selected_chat == *nick;
-                if ui.selectable_label(selected, format!("@{nick}")).clicked() {
+                let unread = self.history.unread_by_peer.get(nick).copied().unwrap_or(0);
+                let label = if unread > 0 {
+                    format!("@{nick} ({unread})")
+                } else {
+                    format!("@{nick}")
+                };
+                if ui.selectable_label(selected, label).clicked() {
                     self.selected_chat = nick.clone();
+                    self.history.unread_by_peer.remove(nick);
+                    self.history.save();
                 }
             }
             if ui.button("Sync incoming").clicked() {
