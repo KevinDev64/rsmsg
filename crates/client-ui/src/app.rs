@@ -32,6 +32,7 @@ pub struct MessengerApp {
     key_change_peer: Option<String>,
     login_rx: Option<Receiver<LoginResult>>,
     open_chat_rx: Option<Receiver<OpenChatResult>>,
+    send_rx: Option<Receiver<SendResult>>,
     last_sync_at: Instant,
 }
 
@@ -58,6 +59,12 @@ struct OpenChatSuccess {
     bundle: FetchPrekeyBundleResponse,
 }
 
+struct SendResult {
+    chat_name: String,
+    message_index: usize,
+    result: Result<(), String>,
+}
+
 impl MessengerApp {
     pub fn new() -> Self {
         let config = ClientConfig::local_default();
@@ -79,6 +86,7 @@ impl MessengerApp {
             key_change_peer: None,
             login_rx: None,
             open_chat_rx: None,
+            send_rx: None,
             last_sync_at: Instant::now(),
         }
     }
@@ -234,6 +242,9 @@ impl MessengerApp {
     }
 
     fn send_current_message(&mut self) {
+        if self.send_rx.is_some() {
+            return;
+        }
         let Some(auth) = self.auth.clone() else {
             self.status = "Log in first".to_string();
             return;
@@ -264,27 +275,49 @@ impl MessengerApp {
         };
         self.message_input.clear();
         self.save_history();
-        let rt = runtime();
-        match rt.block_on(self.core.send_text_to_peer_with_id(
-            &auth,
-            peer_device_uuid,
-            text.clone(),
-            message_id,
-        )) {
-            Ok(true) => {
-                self.update_message_status(&chat_name, message_index, MessageStatus::Sent);
+        let (tx, rx) = mpsc::channel();
+        self.send_rx = Some(rx);
+        let core = self.core.clone();
+        let send_chat_name = chat_name.clone();
+        thread::spawn(move || {
+            let result = run_send_flow(core, auth, peer_device_uuid, text, message_id);
+            let _ = tx.send(SendResult {
+                chat_name: send_chat_name,
+                message_index,
+                result,
+            });
+        });
+    }
+
+    fn poll_send_result(&mut self) {
+        let Some(rx) = self.send_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(sent) => {
+                match sent.result {
+                    Ok(()) => {
+                        self.update_message_status(
+                            &sent.chat_name,
+                            sent.message_index,
+                            MessageStatus::Sent,
+                        );
+                        self.status = "Sent".to_string();
+                    }
+                    Err(err) => {
+                        self.update_message_status(
+                            &sent.chat_name,
+                            sent.message_index,
+                            MessageStatus::Failed,
+                        );
+                        self.status = err;
+                    }
+                }
                 self.save_history();
-                self.status = "Sent".to_string();
             }
-            Ok(false) => {
-                self.update_message_status(&chat_name, message_index, MessageStatus::Failed);
-                self.save_history();
-                self.status = "Peer session missing. Re-open chat.".to_string();
-            }
-            Err(err) => {
-                self.update_message_status(&chat_name, message_index, MessageStatus::Failed);
-                self.save_history();
-                self.status = format!("Send failed: {err}");
+            Err(mpsc::TryRecvError::Empty) => self.send_rx = Some(rx),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Send worker stopped".to_string();
             }
         }
     }
@@ -309,6 +342,13 @@ impl MessengerApp {
         let peer = self.selected_chat.clone();
         let rt = runtime();
 
+        let known_uuid = self.history.device_uuid_by_peer.get(&peer).cloned();
+        if let Some(known_uuid) = known_uuid {
+            if self.core.has_peer_session(&known_uuid) {
+                return Some(known_uuid);
+            }
+        }
+
         let resolved = rt.block_on(
             self.core
                 .resolve_user_device(peer.clone(), DEFAULT_DEVICE_ID.to_string()),
@@ -317,13 +357,6 @@ impl MessengerApp {
             self.status = "Peer not found".to_string();
             return None;
         };
-
-        let known_uuid = self.history.device_uuid_by_peer.get(&peer).cloned();
-        if known_uuid.as_deref() == Some(resolved_uuid.as_str())
-            && self.core.has_peer_session(&resolved_uuid)
-        {
-            return Some(resolved_uuid);
-        }
 
         let derive = rt.block_on(self.core.derive_peer_shared_key(
             self.local_keys.as_ref().expect("local keys"),
@@ -556,6 +589,7 @@ impl eframe::App for MessengerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_login_result();
         self.poll_open_chat_result();
+        self.poll_send_result();
         ctx.request_repaint_after(Duration::from_millis(800));
         if self.auth.is_some() && self.last_sync_at.elapsed() >= Duration::from_secs(2) {
             self.sync_incoming();
@@ -700,7 +734,10 @@ impl eframe::App for MessengerApp {
                 self.send_current_message();
             }
             ui.horizontal(|ui| {
-                if ui.button("Send").clicked() {
+                if ui
+                    .add_enabled(self.send_rx.is_none(), egui::Button::new("Send"))
+                    .clicked()
+                {
                     self.send_current_message();
                 }
             });
@@ -784,4 +821,19 @@ fn run_open_chat_flow(
         resolved_uuid,
         bundle,
     })
+}
+
+fn run_send_flow(
+    core: ClientCore,
+    auth: DeviceAuth,
+    peer_device_uuid: String,
+    text: String,
+    message_id: String,
+) -> Result<(), String> {
+    let rt = runtime();
+    match rt.block_on(core.send_text_to_peer_with_id(&auth, peer_device_uuid, text, message_id)) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("Peer session missing. Re-open chat.".to_string()),
+        Err(err) => Err(format!("Send failed: {err}")),
+    }
 }
