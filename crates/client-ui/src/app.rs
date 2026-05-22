@@ -267,6 +267,11 @@ impl MessengerApp {
     }
 
     fn search_users(&mut self) {
+        if self.auth.is_none() {
+            self.status = "Log in first".to_string();
+            self.peer_search_results.clear();
+            return;
+        }
         let rt = runtime();
         match rt.block_on(self.core.search_users(self.peer_nickname_input.clone())) {
             Ok(users) => {
@@ -875,11 +880,15 @@ impl eframe::App for MessengerApp {
             ui.separator();
             ui.heading("New chat");
             ui.label("Peer nickname");
+            let logged_in = self.auth.is_some();
             ui.add_sized(
                 [160.0, 22.0],
-                egui::TextEdit::singleline(&mut self.peer_nickname_input),
+                egui::TextEdit::singleline(&mut self.peer_nickname_input).interactive(logged_in),
             );
-            if ui.button("Search users").clicked() {
+            if ui
+                .add_enabled(logged_in, egui::Button::new("Search users"))
+                .clicked()
+            {
                 self.search_users();
             }
             for nick in &self.peer_search_results {
@@ -887,7 +896,10 @@ impl eframe::App for MessengerApp {
                     self.peer_nickname_input = nick.clone();
                 }
             }
-            if ui.button("Open chat").clicked() {
+            if ui
+                .add_enabled(logged_in, egui::Button::new("Open chat"))
+                .clicked()
+            {
                 self.open_chat();
             }
 
