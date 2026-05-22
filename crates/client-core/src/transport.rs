@@ -2,12 +2,13 @@ use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{HeaderMap, HeaderValue};
 use shared::{
-    AckMessageRequest, DeviceLoginRequest, DeviceLoginResponse, FetchPendingRequest,
-    FetchPendingResponse, FetchPrekeyBundleRequest, FetchPrekeyBundleResponse,
-    RegisterDeviceRequest, RegisterDeviceResponse, ResolveUserRequest, ResolveUserResponse,
-    SendMessageRequest, SendMessageResponse, UploadPrekeysRequest, UploadPrekeysResponse,
-    UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserRegisterResponse,
-    UserSearchRequest, UserSearchResponse,
+    AckMessageRequest, DeviceLoginRequest, DeviceLoginResponse, DeviceLogoutRequest,
+    DeviceLogoutResponse, FetchPendingRequest, FetchPendingResponse, FetchPrekeyBundleRequest,
+    FetchPrekeyBundleResponse, RegisterDeviceRequest, RegisterDeviceResponse, ResolveDeviceRequest,
+    ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse, SendMessageRequest,
+    SendMessageResponse, UploadPrekeysRequest, UploadPrekeysResponse, UserLoginRequest,
+    UserLoginResponse, UserRegisterRequest, UserRegisterResponse, UserSearchRequest,
+    UserSearchResponse,
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -81,6 +82,24 @@ impl ApiTransport {
         Ok(response.json().await?)
     }
 
+    pub async fn device_logout(&self, auth: &DeviceAuth) -> Result<DeviceLogoutResponse> {
+        let url = format!("{}/v1/device_logout", self.cfg.http_base);
+        let req = DeviceLogoutRequest {
+            device_uuid: auth.device_uuid.clone(),
+        };
+        let response = self
+            .client
+            .post(url)
+            .headers(self.auth_headers(auth)?)
+            .json(&req)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow!("device_logout failed with {}", response.status()));
+        }
+        Ok(response.json().await?)
+    }
+
     pub async fn upload_prekeys(
         &self,
         auth: &DeviceAuth,
@@ -148,6 +167,16 @@ impl ApiTransport {
         let response = self.client.post(url).json(&req).send().await?;
         if !response.status().is_success() {
             return Err(anyhow!("resolve_user failed with {}", response.status()));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn resolve_device(&self, device_uuid: String) -> Result<ResolveDeviceResponse> {
+        let url = format!("{}/v1/resolve_device", self.cfg.http_base);
+        let req = ResolveDeviceRequest { device_uuid };
+        let response = self.client.post(url).json(&req).send().await?;
+        if !response.status().is_success() {
+            return Err(anyhow!("resolve_device failed with {}", response.status()));
         }
         Ok(response.json().await?)
     }

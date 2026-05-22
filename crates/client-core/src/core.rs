@@ -113,6 +113,11 @@ impl ClientCore {
         })
     }
 
+    pub async fn logout_device(&self, auth: &DeviceAuth) -> Result<bool> {
+        let response = self.transport.device_logout(auth).await?;
+        Ok(response.revoked)
+    }
+
     pub async fn upload_prekeys(
         &self,
         auth: &DeviceAuth,
@@ -212,6 +217,11 @@ impl ClientCore {
     pub async fn resolve_user_device(&self, user_id: String, device_id: String) -> Result<String> {
         let response = self.transport.resolve_user(user_id, device_id).await?;
         Ok(response.device_uuid)
+    }
+
+    pub async fn resolve_device_user(&self, device_uuid: String) -> Result<String> {
+        let response = self.transport.resolve_device(device_uuid).await?;
+        Ok(response.user_id)
     }
 
     pub fn decrypt_pending(
