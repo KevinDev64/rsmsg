@@ -3,13 +3,14 @@ use axum::{
     extract::DefaultBodyLimit,
     routing::{get, post},
 };
+use tower_http::trace::TraceLayer;
 
 use crate::{
     app_state::AppState,
     handlers::{blob, device, health, messaging, user, ws},
 };
 
-const MAX_REQUEST_BODY_BYTES: usize = 150 * 1024 * 1024;
+const MAX_REQUEST_BODY_BYTES: usize = 200 * 1024 * 1024;
 
 pub fn build_router(app_state: AppState) -> Router {
     Router::new()
@@ -35,5 +36,6 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/upload_blob", post(blob::upload_blob))
         .route("/v1/fetch_blob", post(blob::fetch_blob))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
+        .layer(TraceLayer::new_for_http())
         .with_state(app_state)
 }

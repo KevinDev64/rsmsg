@@ -261,15 +261,23 @@ impl ApiTransport {
         data_b64: String,
     ) -> Result<UploadBlobResponse> {
         let url = format!("{}/v1/upload_blob", self.cfg.http_base);
+        let encoded_len = data_b64.len();
         let response = self
             .client
             .post(url)
             .headers(self.auth_headers(auth)?)
             .json(&UploadBlobRequest { data_b64 })
             .send()
-            .await?;
+            .await
+            .map_err(|err| {
+                anyhow!("upload_blob request failed, encoded_len={encoded_len}: {err:#}")
+            })?;
         if !response.status().is_success() {
-            return Err(anyhow!("upload_blob failed with {}", response.status()));
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "upload_blob failed with {status}, encoded_len={encoded_len}: {body}"
+            ));
         }
         Ok(response.json().await?)
     }

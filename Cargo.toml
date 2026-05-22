@@ -36,6 +36,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tower-http = { version = "0.6", features = ["trace"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }

@@ -18,7 +18,13 @@ pub async fn upload_blob(
     let data = STANDARD
         .decode(payload.data_b64)
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid blob data"))?;
+    tracing::info!(decoded_len = data.len(), "upload_blob decoded payload");
     if data.len() > MAX_BLOB_BYTES {
+        tracing::warn!(
+            decoded_len = data.len(),
+            max_len = MAX_BLOB_BYTES,
+            "upload_blob rejected: blob too large"
+        );
         return Err(ApiError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "blob too large",
@@ -27,6 +33,7 @@ pub async fn upload_blob(
     let blob_id = blobs::insert_blob(db, owner_device, data)
         .await
         .map_err(|err| ApiError::database("upload_blob insert failed", err))?;
+    tracing::info!(%blob_id, "upload_blob stored blob");
     Ok(UploadBlobResponse {
         blob_id: blob_id.to_string(),
     })

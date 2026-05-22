@@ -8,6 +8,10 @@ pub async fn upload_blob(
     headers: HeaderMap,
     Json(payload): Json<UploadBlobRequest>,
 ) -> ApiResult<Json<UploadBlobResponse>> {
+    tracing::info!(
+        encoded_len = payload.data_b64.len(),
+        "upload_blob request received"
+    );
     let auth_device = authorize_device(&state.db, &headers).await?;
     Ok(Json(
         blob::upload_blob(&state.db, auth_device, payload).await?,
