@@ -80,6 +80,7 @@ fn render_bubble_content(
                 .small()
                 .color(text_color),
         );
+        ui.add_space(8.0);
         if ui.button("Save").clicked() {
             save_clicked = true;
         }
