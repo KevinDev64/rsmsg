@@ -38,6 +38,10 @@ pub struct ChatHistory {
     pub device_uuid_by_peer: BTreeMap<String, String>,
     #[serde(default)]
     pub unread_by_peer: BTreeMap<String, u32>,
+    #[serde(default)]
+    pub peer_identity_key_by_peer: BTreeMap<String, String>,
+    #[serde(default)]
+    pub peer_signing_identity_key_by_peer: BTreeMap<String, String>,
 }
 
 impl ChatHistory {

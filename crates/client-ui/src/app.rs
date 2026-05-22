@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use client_core::{ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, LocalDeviceKeys};
 use eframe::egui;
+use shared::FetchPrekeyBundleResponse;
 use uuid::Uuid;
 
 use crate::{
@@ -24,6 +25,7 @@ pub struct MessengerApp {
     peer_search_results: Vec<String>,
     selected_chat: String,
     message_input: String,
+    key_change_peer: Option<String>,
     last_sync_at: Instant,
 }
 
@@ -46,6 +48,7 @@ impl MessengerApp {
             peer_search_results: Vec::new(),
             selected_chat: String::new(),
             message_input: String::new(),
+            key_change_peer: None,
             last_sync_at: Instant::now(),
         }
     }
@@ -161,6 +164,9 @@ impl MessengerApp {
             Ok((_key, bundle)) => {
                 if bundle.device_uuid != resolved_uuid {
                     self.status = "Peer resolve mismatch, retry".to_string();
+                    return;
+                }
+                if !self.verify_or_pin_peer_identity(&peer, &bundle) {
                     return;
                 }
                 self.selected_chat = peer.clone();
@@ -295,6 +301,9 @@ impl MessengerApp {
             self.status = "Peer resolve mismatch, retry".to_string();
             return None;
         }
+        if !self.verify_or_pin_peer_identity(&peer, &bundle) {
+            return None;
+        }
         self.history
             .peer_by_device_uuid
             .insert(resolved_uuid.clone(), peer.clone());
@@ -329,6 +338,9 @@ impl MessengerApp {
                     peer.clone(),
                     DEFAULT_DEVICE_ID.to_string(),
                 )) {
+                    if !self.verify_or_pin_peer_identity(&peer, &bundle) {
+                        continue;
+                    }
                     self.history
                         .peer_by_device_uuid
                         .insert(item.from_device_uuid.clone(), peer.clone());
@@ -411,6 +423,59 @@ impl MessengerApp {
         }
     }
 
+    fn verify_or_pin_peer_identity(
+        &mut self,
+        peer: &str,
+        bundle: &FetchPrekeyBundleResponse,
+    ) -> bool {
+        let pinned_identity = self.history.peer_identity_key_by_peer.get(peer);
+        let pinned_signing = self.history.peer_signing_identity_key_by_peer.get(peer);
+        let identity_changed = pinned_identity
+            .map(|key| key != &bundle.identity_key_b64)
+            .unwrap_or(false);
+        let signing_changed = pinned_signing
+            .map(|key| key != &bundle.signing_identity_key_b64)
+            .unwrap_or(false);
+        if identity_changed || signing_changed {
+            self.key_change_peer = Some(peer.to_string());
+            self.status = format!("Security warning: @{peer} changed identity key");
+            return false;
+        }
+        self.history
+            .peer_identity_key_by_peer
+            .entry(peer.to_string())
+            .or_insert_with(|| bundle.identity_key_b64.clone());
+        self.history
+            .peer_signing_identity_key_by_peer
+            .entry(peer.to_string())
+            .or_insert_with(|| bundle.signing_identity_key_b64.clone());
+        true
+    }
+
+    fn trust_new_peer_identity(&mut self) {
+        let Some(peer) = self.key_change_peer.clone() else {
+            return;
+        };
+        let rt = runtime();
+        let Ok((_key, bundle)) = rt.block_on(self.core.derive_peer_shared_key(
+            &self.local_keys,
+            peer.clone(),
+            DEFAULT_DEVICE_ID.to_string(),
+        )) else {
+            self.status = format!("Could not refresh @{peer} identity");
+            return;
+        };
+        self.history
+            .peer_identity_key_by_peer
+            .insert(peer.clone(), bundle.identity_key_b64);
+        self.history
+            .peer_signing_identity_key_by_peer
+            .insert(peer.clone(), bundle.signing_identity_key_b64);
+        self.key_change_peer = None;
+        self.history.save();
+        self.status = format!("Trusted new identity for @{peer}");
+    }
+
     fn push_incoming(&mut self, msg: DecryptedMessage) {
         let nick = self
             .history
@@ -449,6 +514,13 @@ impl eframe::App for MessengerApp {
                 ui.heading("rsmsg");
                 ui.separator();
                 ui.label(&self.status);
+                if let Some(peer) = &self.key_change_peer {
+                    ui.separator();
+                    ui.label(format!("@{peer} key changed"));
+                    if ui.button("Trust new key").clicked() {
+                        self.trust_new_peer_identity();
+                    }
+                }
             });
         });
 
