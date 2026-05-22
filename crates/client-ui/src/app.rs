@@ -9,6 +9,7 @@ use client_core::{
     ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, LocalDeviceKeys, OutgoingMessageStatus,
 };
 use eframe::egui;
+use sha2::{Digest, Sha256};
 use shared::FetchPrekeyBundleResponse;
 use uuid::Uuid;
 
@@ -666,6 +667,22 @@ impl eframe::App for MessengerApp {
                 if ui.button("Logout").clicked() {
                     self.logout();
                 }
+                ui.separator();
+                ui.collapsing("Security", |ui| {
+                    if let Some(local) = self.local_safety_number() {
+                        ui.label("Your device fingerprint");
+                        ui.monospace(local);
+                    }
+                    if !self.selected_chat.is_empty() {
+                        ui.separator();
+                        ui.label(format!("@{} fingerprint", self.selected_chat));
+                        if let Some(peer) = self.peer_safety_number(&self.selected_chat) {
+                            ui.monospace(peer);
+                        } else {
+                            ui.label("Open chat to pin identity key");
+                        }
+                    }
+                });
             } else {
                 ui.label("Server");
                 ui.text_edit_singleline(&mut self.server_input);
@@ -782,6 +799,41 @@ impl eframe::App for MessengerApp {
             });
         });
     }
+}
+
+impl MessengerApp {
+    fn local_safety_number(&self) -> Option<String> {
+        let keys = self.local_keys.as_ref()?;
+        Some(format_safety_number(&[
+            &keys.identity_public_b64,
+            keys.signing_identity_public_b64
+                .as_deref()
+                .unwrap_or_default(),
+        ]))
+    }
+
+    fn peer_safety_number(&self, peer: &str) -> Option<String> {
+        let identity = self.history.peer_identity_key_by_peer.get(peer)?;
+        let signing = self.history.peer_signing_identity_key_by_peer.get(peer)?;
+        Some(format_safety_number(&[identity, signing]))
+    }
+}
+
+fn format_safety_number(parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"rsmsg-safety-number-v1");
+    for part in parts {
+        hasher.update([0]);
+        hasher.update(part.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let mut groups = Vec::new();
+    for chunk in digest.chunks(4).take(6) {
+        let mut bytes = [0_u8; 4];
+        bytes[..chunk.len()].copy_from_slice(chunk);
+        groups.push(format!("{:05}", u32::from_be_bytes(bytes) % 100_000));
+    }
+    groups.join(" ")
 }
 
 fn runtime() -> tokio::runtime::Runtime {
