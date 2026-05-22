@@ -28,5 +28,6 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/send_message", post(messaging::send_message))
         .route("/v1/fetch_pending", post(messaging::fetch_pending))
         .route("/v1/ack_message", post(messaging::ack_message))
+        .route("/v1/message_status", post(messaging::message_status))
         .with_state(app_state)
 }

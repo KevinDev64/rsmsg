@@ -2,8 +2,8 @@ use axum::http::StatusCode;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use shared::{
     AckMessageRequest, AckMessageResponse, FetchPendingRequest, FetchPendingResponse,
-    FetchPrekeyBundleRequest, FetchPrekeyBundleResponse, PrekeyUploadItem, SendMessageRequest,
-    SendMessageResponse,
+    FetchPrekeyBundleRequest, FetchPrekeyBundleResponse, MessageStatusItem, MessageStatusRequest,
+    MessageStatusResponse, PrekeyUploadItem, SendMessageRequest, SendMessageResponse,
 };
 use uuid::Uuid;
 
@@ -115,4 +115,29 @@ pub async fn ack_message(
         .await
         .map_err(|err| ApiError::database("ack_message update failed", err))?;
     Ok(AckMessageResponse { acked })
+}
+
+pub async fn message_status(
+    db: &sqlx::PgPool,
+    auth_device: Uuid,
+    payload: MessageStatusRequest,
+) -> ApiResult<MessageStatusResponse> {
+    if payload.message_ids.is_empty() {
+        return Ok(MessageStatusResponse {
+            messages: Vec::new(),
+        });
+    }
+    let rows = messages::fetch_statuses(db, auth_device, payload.message_ids)
+        .await
+        .map_err(|err| ApiError::database("message_status query failed", err))?;
+    Ok(MessageStatusResponse {
+        messages: rows
+            .into_iter()
+            .map(|(message_id, delivered, read)| MessageStatusItem {
+                message_id,
+                delivered,
+                read,
+            })
+            .collect(),
+    })
 }

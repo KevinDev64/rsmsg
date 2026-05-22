@@ -103,6 +103,23 @@ pub struct AckMessageResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageStatusRequest {
+    pub message_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageStatusItem {
+    pub message_id: String,
+    pub delivered: bool,
+    pub read: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageStatusResponse {
+    pub messages: Vec<MessageStatusItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceLogoutRequest {
     pub device_uuid: String,
 }

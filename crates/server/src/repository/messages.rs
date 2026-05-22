@@ -69,3 +69,19 @@ pub async fn ack_messages(
 
     Ok(result.rows_affected())
 }
+
+pub async fn fetch_statuses(
+    db: &sqlx::PgPool,
+    from_device: Uuid,
+    message_ids: Vec<String>,
+) -> Result<Vec<(String, bool, bool)>, sqlx::Error> {
+    sqlx::query_as::<_, (String, bool, bool)>(
+        "SELECT message_id, delivered_at IS NOT NULL, acked_at IS NOT NULL \
+         FROM messages \
+         WHERE from_device = $1 AND message_id = ANY($2::text[])",
+    )
+    .bind(from_device)
+    .bind(message_ids)
+    .fetch_all(db)
+    .await
+}

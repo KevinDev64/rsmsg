@@ -1,7 +1,8 @@
 use axum::{Json, extract::State, http::HeaderMap};
 use shared::{
     AckMessageRequest, AckMessageResponse, FetchPendingRequest, FetchPendingResponse,
-    FetchPrekeyBundleRequest, FetchPrekeyBundleResponse, SendMessageRequest, SendMessageResponse,
+    FetchPrekeyBundleRequest, FetchPrekeyBundleResponse, MessageStatusRequest,
+    MessageStatusResponse, SendMessageRequest, SendMessageResponse,
 };
 
 use crate::{api_error::ApiResult, app_state::AppState, auth::authorize_device, domain::messaging};
@@ -45,5 +46,16 @@ pub async fn ack_message(
     let auth_device = authorize_device(&state.db, &headers).await?;
     Ok(Json(
         messaging::ack_message(&state.db, auth_device, payload).await?,
+    ))
+}
+
+pub async fn message_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<MessageStatusRequest>,
+) -> ApiResult<Json<MessageStatusResponse>> {
+    let auth_device = authorize_device(&state.db, &headers).await?;
+    Ok(Json(
+        messaging::message_status(&state.db, auth_device, payload).await?,
     ))
 }
