@@ -875,7 +875,10 @@ impl eframe::App for MessengerApp {
             ui.separator();
             ui.heading("New chat");
             ui.label("Peer nickname");
-            ui.text_edit_singleline(&mut self.peer_nickname_input);
+            ui.add_sized(
+                [160.0, 22.0],
+                egui::TextEdit::singleline(&mut self.peer_nickname_input),
+            );
             if ui.button("Search users").clicked() {
                 self.search_users();
             }
@@ -919,10 +922,14 @@ impl eframe::App for MessengerApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.auth.is_none() {
-                ui.heading("Welcome to rsmsg");
-                ui.label("1) Enter your nickname");
-                ui.label("2) Press Register / Login");
-                ui.label("3) Open chat by peer nickname");
+                ui.centered_and_justified(|ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.heading("Welcome to rsmsg");
+                        ui.label("1) Enter your nickname");
+                        ui.label("2) Press Register / Login");
+                        ui.label("3) Open chat by peer nickname");
+                    });
+                });
                 return;
             }
 
