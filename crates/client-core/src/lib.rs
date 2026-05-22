@@ -1,5 +1,6 @@
 mod core;
 mod key_store;
+pub mod local_vault;
 mod session_store;
 mod transport;
 mod types;

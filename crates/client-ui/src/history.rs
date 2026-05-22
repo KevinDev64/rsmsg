@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
+use client_core::local_vault;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -45,11 +46,14 @@ pub struct ChatHistory {
 }
 
 impl ChatHistory {
-    pub fn load() -> Self {
+    pub fn load(password: Option<&str>) -> Self {
         let file = history_file();
         let path = Path::new(&file);
         if !path.exists() {
             return Self::default();
+        }
+        if let Some(history) = local_vault::load_json::<Self>(&file, password) {
+            return history;
         }
         let Ok(raw) = fs::read_to_string(path) else {
             return Self::default();
@@ -57,10 +61,8 @@ impl ChatHistory {
         serde_json::from_str(&raw).unwrap_or_default()
     }
 
-    pub fn save(&self) {
-        if let Ok(raw) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(history_file(), raw);
-        }
+    pub fn save(&self, password: Option<&str>) {
+        let _ = local_vault::save_json(&history_file(), self, password);
     }
 }
 

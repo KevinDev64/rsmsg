@@ -22,19 +22,26 @@ pub struct ClientCore {
     transport: ApiTransport,
     session_store_path: String,
     key_store_path: String,
+    local_password: Mutex<Option<String>>,
     peer_sessions: Mutex<HashMap<String, String>>,
 }
 
 impl ClientCore {
     pub fn new(config: ClientConfig) -> Self {
-        let sessions = session_store::load(&config.session_store_path);
         Self {
             crypto: CryptoEngine::new(),
             transport: ApiTransport::new(config.clone()),
             session_store_path: config.session_store_path,
             key_store_path: config.key_store_path,
-            peer_sessions: Mutex::new(sessions),
+            local_password: Mutex::new(None),
+            peer_sessions: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn unlock_local_storage(&self, password: String) {
+        let sessions = session_store::load(&self.session_store_path, Some(&password));
+        *self.local_password.lock().expect("local_password") = Some(password);
+        *self.peer_sessions.lock().expect("peer_sessions") = sessions;
     }
 
     pub fn healthcheck(&self) -> Result<()> {
@@ -60,19 +67,21 @@ impl ClientCore {
     }
 
     pub fn load_or_create_local_device_keys(&self) -> LocalDeviceKeys {
-        if let Some(mut keys) = key_store::load(&self.key_store_path) {
+        let password = self.local_password.lock().expect("local_password").clone();
+        if let Some(mut keys) = key_store::load(&self.key_store_path, password.as_deref()) {
             if keys.signing_identity_private_b64.is_none()
                 || keys.signing_identity_public_b64.is_none()
             {
                 let signing = self.crypto.generate_ed25519_keypair();
                 keys.signing_identity_private_b64 = Some(signing.private_b64);
                 keys.signing_identity_public_b64 = Some(signing.public_b64);
-                let _ = key_store::save(&self.key_store_path, &keys);
+                let _ = key_store::save(&self.key_store_path, &keys, password.as_deref());
             }
+            let _ = key_store::save(&self.key_store_path, &keys, password.as_deref());
             return keys;
         }
         let keys = self.generate_local_device_keys();
-        let _ = key_store::save(&self.key_store_path, &keys);
+        let _ = key_store::save(&self.key_store_path, &keys, password.as_deref());
         keys
     }
 
@@ -357,7 +366,8 @@ impl ClientCore {
 
     fn persist_sessions(&self) -> Result<()> {
         let sessions = self.peer_sessions.lock().expect("peer_sessions");
-        session_store::save(&self.session_store_path, &sessions)?;
+        let password = self.local_password.lock().expect("local_password").clone();
+        session_store::save(&self.session_store_path, &sessions, password.as_deref())?;
         Ok(())
     }
 }

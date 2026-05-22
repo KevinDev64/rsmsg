@@ -1,16 +1,9 @@
-use std::{collections::HashMap, fs, path::Path};
+use std::collections::HashMap;
 
-use crate::types::StoredPeerSession;
+use crate::{local_vault, types::StoredPeerSession};
 
-pub fn load(path: &str) -> HashMap<String, String> {
-    let file = Path::new(path);
-    if !file.exists() {
-        return HashMap::new();
-    }
-    let Ok(raw) = fs::read_to_string(file) else {
-        return HashMap::new();
-    };
-    let Ok(items) = serde_json::from_str::<Vec<StoredPeerSession>>(&raw) else {
+pub fn load(path: &str, password: Option<&str>) -> HashMap<String, String> {
+    let Some(items) = local_vault::load_json::<Vec<StoredPeerSession>>(path, password) else {
         return HashMap::new();
     };
     items
@@ -19,7 +12,11 @@ pub fn load(path: &str) -> HashMap<String, String> {
         .collect()
 }
 
-pub fn save(path: &str, sessions: &HashMap<String, String>) -> anyhow::Result<()> {
+pub fn save(
+    path: &str,
+    sessions: &HashMap<String, String>,
+    password: Option<&str>,
+) -> anyhow::Result<()> {
     let mut items: Vec<StoredPeerSession> = sessions
         .iter()
         .map(|(peer_device_uuid, shared_key_b64)| StoredPeerSession {
@@ -28,7 +25,5 @@ pub fn save(path: &str, sessions: &HashMap<String, String>) -> anyhow::Result<()
         })
         .collect();
     items.sort_by(|a, b| a.peer_device_uuid.cmp(&b.peer_device_uuid));
-    let json = serde_json::to_string_pretty(&items)?;
-    fs::write(path, json)?;
-    Ok(())
+    local_vault::save_json(path, &items, password)
 }

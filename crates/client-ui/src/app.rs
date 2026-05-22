@@ -14,7 +14,7 @@ const DEFAULT_DEVICE_ID: &str = "main";
 
 pub struct MessengerApp {
     core: ClientCore,
-    local_keys: LocalDeviceKeys,
+    local_keys: Option<LocalDeviceKeys>,
     history: ChatHistory,
     server_input: String,
     nickname: String,
@@ -34,11 +34,10 @@ impl MessengerApp {
         let config = ClientConfig::local_default();
         let server_input = config.http_base.clone();
         let core = ClientCore::new(config);
-        let local_keys = core.load_or_create_local_device_keys();
         Self {
             core,
-            local_keys,
-            history: ChatHistory::load(),
+            local_keys: None,
+            history: ChatHistory::load(None),
             server_input,
             nickname: String::new(),
             password: String::new(),
@@ -90,10 +89,18 @@ impl MessengerApp {
             }
         }
 
+        self.core.unlock_local_storage(self.password.clone());
+        self.history = ChatHistory::load(Some(&self.password));
+        self.local_keys = Some(self.core.load_or_create_local_device_keys());
+        let Some(local_keys) = self.local_keys.as_ref() else {
+            self.status = "Local keys unavailable".to_string();
+            return;
+        };
+
         let req = match self.core.build_register_request(
             self.nickname.clone(),
             DEFAULT_DEVICE_ID.to_string(),
-            &self.local_keys,
+            local_keys,
         ) {
             Ok(req) => req,
             Err(err) => {
@@ -121,7 +128,7 @@ impl MessengerApp {
         let config = ClientConfig::for_server(&self.server_input);
         self.server_input = config.http_base.clone();
         self.core = ClientCore::new(config);
-        self.local_keys = self.core.load_or_create_local_device_keys();
+        self.local_keys = None;
     }
 
     fn logout(&mut self) {
@@ -130,6 +137,8 @@ impl MessengerApp {
             let _ = rt.block_on(self.core.logout_device(&auth));
         }
         self.auth = None;
+        self.local_keys = None;
+        self.history = ChatHistory::load(None);
         self.password.clear();
         self.status = "Logged out".to_string();
     }
@@ -156,7 +165,7 @@ impl MessengerApp {
         };
 
         let derive = rt.block_on(self.core.derive_peer_shared_key(
-            &self.local_keys,
+            self.local_keys.as_ref().expect("local keys"),
             peer.clone(),
             DEFAULT_DEVICE_ID.to_string(),
         ));
@@ -178,7 +187,7 @@ impl MessengerApp {
                     .device_uuid_by_peer
                     .insert(peer.clone(), resolved_uuid);
                 self.mark_selected_chat_read(&rt, &auth);
-                self.history.save();
+                self.save_history();
                 self.status = format!("Chat with @{peer} ready");
             }
             Err(err) => {
@@ -233,7 +242,7 @@ impl MessengerApp {
             chat.len() - 1
         };
         self.message_input.clear();
-        self.history.save();
+        self.save_history();
         let rt = runtime();
         match rt.block_on(self.core.send_text_to_peer_with_id(
             &auth,
@@ -243,17 +252,17 @@ impl MessengerApp {
         )) {
             Ok(true) => {
                 self.update_message_status(&chat_name, message_index, MessageStatus::Sent);
-                self.history.save();
+                self.save_history();
                 self.status = "Sent".to_string();
             }
             Ok(false) => {
                 self.update_message_status(&chat_name, message_index, MessageStatus::Failed);
-                self.history.save();
+                self.save_history();
                 self.status = "Peer session missing. Re-open chat.".to_string();
             }
             Err(err) => {
                 self.update_message_status(&chat_name, message_index, MessageStatus::Failed);
-                self.history.save();
+                self.save_history();
                 self.status = format!("Send failed: {err}");
             }
         }
@@ -289,7 +298,7 @@ impl MessengerApp {
         };
 
         let derive = rt.block_on(self.core.derive_peer_shared_key(
-            &self.local_keys,
+            self.local_keys.as_ref().expect("local keys"),
             peer.clone(),
             DEFAULT_DEVICE_ID.to_string(),
         ));
@@ -310,7 +319,7 @@ impl MessengerApp {
         self.history
             .device_uuid_by_peer
             .insert(peer.clone(), resolved_uuid.clone());
-        self.history.save();
+        self.save_history();
 
         Some(resolved_uuid)
     }
@@ -334,7 +343,7 @@ impl MessengerApp {
                 };
             if let Some(peer) = peer {
                 if let Ok((_key, bundle)) = rt.block_on(self.core.derive_peer_shared_key(
-                    &self.local_keys,
+                    self.local_keys.as_ref().expect("local keys"),
                     peer.clone(),
                     DEFAULT_DEVICE_ID.to_string(),
                 )) {
@@ -357,7 +366,7 @@ impl MessengerApp {
         }
         self.mark_selected_chat_read(&rt, &auth);
         self.sync_outgoing_statuses(&rt, &auth);
-        self.history.save();
+        self.save_history();
         self.last_sync_at = Instant::now();
     }
 
@@ -458,7 +467,7 @@ impl MessengerApp {
         };
         let rt = runtime();
         let Ok((_key, bundle)) = rt.block_on(self.core.derive_peer_shared_key(
-            &self.local_keys,
+            self.local_keys.as_ref().expect("local keys"),
             peer.clone(),
             DEFAULT_DEVICE_ID.to_string(),
         )) else {
@@ -472,8 +481,20 @@ impl MessengerApp {
             .peer_signing_identity_key_by_peer
             .insert(peer.clone(), bundle.signing_identity_key_b64);
         self.key_change_peer = None;
-        self.history.save();
+        self.save_history();
         self.status = format!("Trusted new identity for @{peer}");
+    }
+
+    fn save_history(&self) {
+        self.history.save(self.password_for_local_storage());
+    }
+
+    fn password_for_local_storage(&self) -> Option<&str> {
+        if self.auth.is_some() && !self.password.is_empty() {
+            Some(&self.password)
+        } else {
+            None
+        }
     }
 
     fn push_incoming(&mut self, msg: DecryptedMessage) {
@@ -589,7 +610,7 @@ impl eframe::App for MessengerApp {
                         let rt = runtime();
                         self.mark_selected_chat_read(&rt, &auth);
                     }
-                    self.history.save();
+                    self.save_history();
                 }
             }
             if ui.button("Sync incoming").clicked() {

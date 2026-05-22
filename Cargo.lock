@@ -764,8 +764,12 @@ name = "client-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argon2",
+ "base64",
+ "chacha20poly1305",
  "crypto",
  "futures-util",
+ "rand 0.8.6",
  "reqwest",
  "serde",
  "serde_json",
