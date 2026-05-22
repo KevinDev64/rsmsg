@@ -1,6 +1,7 @@
 mod app;
 mod history;
 mod message_ui;
+mod settings;
 
 use app::MessengerApp;
 

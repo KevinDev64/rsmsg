@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::{
     history::{ChatHistory, ChatMessage, MessageStatus, now_ms},
     message_ui::render_message_bubble,
+    settings::{AppSettings, AppTheme},
 };
 
 const DEFAULT_DEVICE_ID: &str = "main";
@@ -31,6 +32,8 @@ pub struct MessengerApp {
     password: String,
     auth: Option<DeviceAuth>,
     status: String,
+    settings: AppSettings,
+    settings_open: bool,
     peer_nickname_input: String,
     peer_search_results: Vec<String>,
     selected_chat: String,
@@ -95,18 +98,22 @@ struct PeerMapping {
 
 impl MessengerApp {
     pub fn new() -> Self {
+        let settings = AppSettings::load();
         let config = ClientConfig::local_default();
         let server_input = config.http_base.clone();
         let core = ClientCore::new(config);
+        let nickname = settings.default_username.clone();
         Self {
             core,
             local_keys: None,
             history: ChatHistory::load(None),
             server_input,
-            nickname: String::new(),
+            nickname,
             password: String::new(),
             auth: None,
             status: "Not logged in".to_string(),
+            settings,
+            settings_open: false,
             peer_nickname_input: String::new(),
             peer_search_results: Vec::new(),
             selected_chat: String::new(),
@@ -157,6 +164,10 @@ impl MessengerApp {
                     self.auth = Some(success.auth);
                     self.server_input = success.server_input;
                     self.status = success.status;
+                    if self.settings.default_username.trim().is_empty() {
+                        self.settings.default_username = self.nickname.clone();
+                        self.settings.save();
+                    }
                 }
                 Err(err) => self.status = err,
             },
@@ -785,6 +796,7 @@ impl MessengerApp {
 
 impl eframe::App for MessengerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.apply_theme(ctx);
         self.poll_login_result();
         self.poll_open_chat_result();
         self.poll_send_result();
@@ -813,16 +825,9 @@ impl eframe::App for MessengerApp {
             ui.heading("Account");
             if self.auth.is_some() {
                 ui.label(format!("@{}", self.nickname));
-                ui.collapsing("Settings", |ui| {
-                    ui.label("Server");
-                    ui.text_edit_singleline(&mut self.server_input);
-                    ui.label("Nickname");
-                    ui.text_edit_singleline(&mut self.nickname);
-                    if ui.button("Apply after logout").clicked() {
-                        self.logout();
-                        self.apply_server_config();
-                    }
-                });
+                if ui.button("Settings").clicked() {
+                    self.settings_open = true;
+                }
                 if ui.button("Logout").clicked() {
                     self.logout();
                 }
@@ -861,6 +866,9 @@ impl eframe::App for MessengerApp {
                     .clicked()
                 {
                     self.register_or_login(false);
+                }
+                if ui.button("Settings").clicked() {
+                    self.settings_open = true;
                 }
             }
 
@@ -975,10 +983,89 @@ impl eframe::App for MessengerApp {
                 }
             });
         });
+
+        if self.settings_open {
+            self.render_settings_window(ctx);
+        }
     }
 }
 
 impl MessengerApp {
+    fn apply_theme(&self, ctx: &egui::Context) {
+        match self.settings.theme {
+            AppTheme::System => ctx.set_theme(egui::ThemePreference::System),
+            AppTheme::Light => ctx.set_theme(egui::ThemePreference::Light),
+            AppTheme::Dark => ctx.set_theme(egui::ThemePreference::Dark),
+        }
+    }
+
+    fn render_settings_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.settings_open;
+        egui::Window::new("Settings")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(360.0)
+            .show(ctx, |ui| {
+                ui.heading("Appearance");
+                let mut changed = false;
+                changed |= ui
+                    .radio_value(&mut self.settings.theme, AppTheme::System, "System")
+                    .changed();
+                changed |= ui
+                    .radio_value(&mut self.settings.theme, AppTheme::Light, "Light")
+                    .changed();
+                changed |= ui
+                    .radio_value(&mut self.settings.theme, AppTheme::Dark, "Dark")
+                    .changed();
+                if changed {
+                    self.apply_theme(ctx);
+                    self.settings.save();
+                }
+
+                ui.separator();
+                ui.heading("Profile");
+                ui.label("Default username");
+                let username_changed = ui
+                    .text_edit_singleline(&mut self.settings.default_username)
+                    .changed();
+                if username_changed {
+                    self.settings.default_username =
+                        self.settings.default_username.trim().to_string();
+                    if self.auth.is_none() {
+                        self.nickname = self.settings.default_username.clone();
+                    }
+                    self.settings.save();
+                }
+                if ui.button("Use current username").clicked() {
+                    self.settings.default_username = self.nickname.trim().to_string();
+                    self.settings.save();
+                }
+
+                ui.separator();
+                ui.heading("Connection");
+                ui.label("Server");
+                ui.text_edit_singleline(&mut self.server_input);
+                if self.auth.is_some() {
+                    if ui.button("Apply after logout").clicked() {
+                        self.logout();
+                        self.apply_server_config();
+                    }
+                }
+
+                ui.separator();
+                ui.heading("About");
+                ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                ui.label("Creator KevinDev64 <kevindev56@yandex.ru>");
+
+                ui.separator();
+                if ui.button("Close").clicked() {
+                    self.settings_open = false;
+                }
+            });
+        self.settings_open = open && self.settings_open;
+    }
+
     fn local_safety_number(&self) -> Option<String> {
         let keys = self.local_keys.as_ref()?;
         Some(format_safety_number(&[
