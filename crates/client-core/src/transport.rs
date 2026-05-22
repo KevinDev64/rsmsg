@@ -4,11 +4,11 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use shared::{
     AckMessageRequest, DeviceLoginRequest, DeviceLoginResponse, DeviceLogoutRequest,
     DeviceLogoutResponse, FetchPendingRequest, FetchPendingResponse, FetchPrekeyBundleRequest,
-    FetchPrekeyBundleResponse, RegisterDeviceRequest, RegisterDeviceResponse, ResolveDeviceRequest,
-    ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse, SendMessageRequest,
-    SendMessageResponse, UploadPrekeysRequest, UploadPrekeysResponse, UserLoginRequest,
-    UserLoginResponse, UserRegisterRequest, UserRegisterResponse, UserSearchRequest,
-    UserSearchResponse,
+    FetchPrekeyBundleResponse, MessageStatusRequest, MessageStatusResponse, RegisterDeviceRequest,
+    RegisterDeviceResponse, ResolveDeviceRequest, ResolveDeviceResponse, ResolveUserRequest,
+    ResolveUserResponse, SendMessageRequest, SendMessageResponse, UploadPrekeysRequest,
+    UploadPrekeysResponse, UserLoginRequest, UserLoginResponse, UserRegisterRequest,
+    UserRegisterResponse, UserSearchRequest, UserSearchResponse,
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -231,6 +231,26 @@ impl ApiTransport {
             return Err(anyhow!("ack_message failed with {}", response.status()));
         }
         Ok(())
+    }
+
+    pub async fn message_status(
+        &self,
+        auth: &DeviceAuth,
+        message_ids: Vec<String>,
+    ) -> Result<MessageStatusResponse> {
+        let url = format!("{}/v1/message_status", self.cfg.http_base);
+        let req = MessageStatusRequest { message_ids };
+        let response = self
+            .client
+            .post(url)
+            .headers(self.auth_headers(auth)?)
+            .json(&req)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow!("message_status failed with {}", response.status()));
+        }
+        Ok(response.json().await?)
     }
 
     pub async fn ws_once(&self, auth: &DeviceAuth) -> Result<Vec<PendingEnvelope>> {

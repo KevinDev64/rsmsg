@@ -60,6 +60,13 @@ pub struct DecryptedMessage {
     pub created_at_unix_ms: i64,
 }
 
+#[derive(Clone, Debug)]
+pub struct OutgoingMessageStatus {
+    pub message_id: String,
+    pub delivered: bool,
+    pub read: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LocalDeviceKeys {
     pub identity_private_b64: String,

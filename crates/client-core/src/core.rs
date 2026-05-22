@@ -11,7 +11,10 @@ use uuid::Uuid;
 use crate::{
     key_store, session_store,
     transport::ApiTransport,
-    types::{ClientConfig, DecryptedMessage, DeviceAuth, LocalDeviceKeys, PendingEnvelope},
+    types::{
+        ClientConfig, DecryptedMessage, DeviceAuth, LocalDeviceKeys, OutgoingMessageStatus,
+        PendingEnvelope,
+    },
 };
 
 pub struct ClientCore {
@@ -139,11 +142,29 @@ impl ClientCore {
         plaintext: String,
         shared_key_b64: &str,
     ) -> Result<bool> {
+        self.send_text_message_with_id(
+            auth,
+            to_device_uuid,
+            plaintext,
+            shared_key_b64,
+            Uuid::new_v4().to_string(),
+        )
+        .await
+    }
+
+    pub async fn send_text_message_with_id(
+        &self,
+        auth: &DeviceAuth,
+        to_device_uuid: String,
+        plaintext: String,
+        shared_key_b64: &str,
+        message_id: String,
+    ) -> Result<bool> {
         let envelope_b64 = self
             .crypto
             .encrypt_text_to_b64(shared_key_b64, &plaintext)?;
         let req = SendMessageRequest {
-            message_id: Uuid::new_v4().to_string(),
+            message_id,
             from_device_uuid: auth.device_uuid.clone(),
             to_device_uuid,
             envelope_b64,
@@ -170,6 +191,26 @@ impl ClientCore {
             .await
     }
 
+    pub async fn send_text_to_peer_with_id(
+        &self,
+        auth: &DeviceAuth,
+        peer_device_uuid: String,
+        plaintext: String,
+        message_id: String,
+    ) -> Result<bool> {
+        let key = self
+            .peer_sessions
+            .lock()
+            .expect("peer_sessions")
+            .get(&peer_device_uuid)
+            .cloned();
+        let Some(key) = key else {
+            return Ok(false);
+        };
+        self.send_text_message_with_id(auth, peer_device_uuid, plaintext, &key, message_id)
+            .await
+    }
+
     pub fn has_peer_session(&self, peer_device_uuid: &str) -> bool {
         self.peer_sessions
             .lock()
@@ -187,6 +228,23 @@ impl ClientCore {
 
     pub async fn ack_messages(&self, auth: &DeviceAuth, message_ids: Vec<String>) -> Result<()> {
         self.transport.ack_messages(auth, message_ids).await
+    }
+
+    pub async fn message_statuses(
+        &self,
+        auth: &DeviceAuth,
+        message_ids: Vec<String>,
+    ) -> Result<Vec<OutgoingMessageStatus>> {
+        let response = self.transport.message_status(auth, message_ids).await?;
+        Ok(response
+            .messages
+            .into_iter()
+            .map(|item| OutgoingMessageStatus {
+                message_id: item.message_id,
+                delivered: item.delivered,
+                read: item.read,
+            })
+            .collect())
     }
 
     pub async fn ws_drain_once(&self, auth: &DeviceAuth) -> Result<Vec<PendingEnvelope>> {
