@@ -790,6 +790,7 @@ dependencies = [
  "egui",
  "serde",
  "serde_json",
+ "sha2",
  "shared",
  "tokio",
  "uuid",
