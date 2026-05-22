@@ -1,4 +1,8 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::mpsc::{self, Receiver},
+    thread,
+    time::{Duration, Instant},
+};
 
 use client_core::{ClientConfig, ClientCore, DecryptedMessage, DeviceAuth, LocalDeviceKeys};
 use eframe::egui;
@@ -26,7 +30,21 @@ pub struct MessengerApp {
     selected_chat: String,
     message_input: String,
     key_change_peer: Option<String>,
+    login_rx: Option<Receiver<LoginResult>>,
     last_sync_at: Instant,
+}
+
+struct LoginResult {
+    result: Result<LoginSuccess, String>,
+}
+
+struct LoginSuccess {
+    core: ClientCore,
+    local_keys: LocalDeviceKeys,
+    history: ChatHistory,
+    auth: DeviceAuth,
+    server_input: String,
+    status: String,
 }
 
 impl MessengerApp {
@@ -48,79 +66,57 @@ impl MessengerApp {
             selected_chat: String::new(),
             message_input: String::new(),
             key_change_peer: None,
+            login_rx: None,
             last_sync_at: Instant::now(),
         }
     }
 
     fn register_or_login(&mut self, create: bool) {
+        if self.login_rx.is_some() {
+            return;
+        }
         if self.nickname.trim().is_empty() || self.password.len() < 6 {
             self.status = "Enter nickname and password (>=6)".to_string();
             return;
         }
-        self.apply_server_config();
-        let rt = runtime();
+        let (tx, rx) = mpsc::channel();
+        self.login_rx = Some(rx);
+        self.status = if create {
+            "Creating account...".to_string()
+        } else {
+            "Logging in...".to_string()
+        };
+        let nickname = self.nickname.clone();
+        let password = self.password.clone();
+        let server_input = self.server_input.clone();
+        thread::spawn(move || {
+            let result = run_login_flow(create, nickname, password, server_input);
+            let _ = tx.send(LoginResult { result });
+        });
+    }
 
-        if create {
-            match rt.block_on(
-                self.core
-                    .register_user(self.nickname.clone(), self.password.clone()),
-            ) {
-                Ok(true) => self.status = "Account created".to_string(),
-                Ok(false) => self.status = "Nickname already exists".to_string(),
-                Err(err) => {
-                    self.status = format!("Account create failed: {err}");
-                    return;
+    fn poll_login_result(&mut self) {
+        let Some(rx) = self.login_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(login) => match login.result {
+                Ok(success) => {
+                    self.core = success.core;
+                    self.local_keys = Some(success.local_keys);
+                    self.history = success.history;
+                    self.auth = Some(success.auth);
+                    self.server_input = success.server_input;
+                    self.status = success.status;
                 }
+                Err(err) => self.status = err,
+            },
+            Err(mpsc::TryRecvError::Empty) => {
+                self.login_rx = Some(rx);
             }
-        }
-
-        match rt.block_on(
-            self.core
-                .login_user(self.nickname.clone(), self.password.clone()),
-        ) {
-            Ok(true) => {}
-            Ok(false) => {
-                self.status = "Invalid credentials".to_string();
-                return;
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Login worker stopped".to_string();
             }
-            Err(err) => {
-                self.status = format!("User login failed: {err}");
-                return;
-            }
-        }
-
-        self.core.unlock_local_storage(self.password.clone());
-        self.history = ChatHistory::load(Some(&self.password));
-        self.local_keys = Some(self.core.load_or_create_local_device_keys());
-        let Some(local_keys) = self.local_keys.as_ref() else {
-            self.status = "Local keys unavailable".to_string();
-            return;
-        };
-
-        let req = match self.core.build_register_request(
-            self.nickname.clone(),
-            DEFAULT_DEVICE_ID.to_string(),
-            local_keys,
-        ) {
-            Ok(req) => req,
-            Err(err) => {
-                self.status = format!("Register failed: {err}");
-                return;
-            }
-        };
-        if let Err(err) = rt.block_on(self.core.register_device(req)) {
-            self.status = format!("Register failed: {err}");
-            return;
-        }
-        match rt.block_on(
-            self.core
-                .login_device(self.nickname.clone(), DEFAULT_DEVICE_ID.to_string()),
-        ) {
-            Ok(auth) => {
-                self.auth = Some(auth);
-                self.status = format!("Logged in as {}", self.nickname);
-            }
-            Err(err) => self.status = format!("Login failed: {err}"),
         }
     }
 
@@ -533,6 +529,7 @@ impl MessengerApp {
 
 impl eframe::App for MessengerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_login_result();
         ctx.request_repaint_after(Duration::from_millis(800));
         if self.auth.is_some() && self.last_sync_at.elapsed() >= Duration::from_secs(2) {
             self.sync_incoming();
@@ -577,10 +574,17 @@ impl eframe::App for MessengerApp {
                 ui.text_edit_singleline(&mut self.nickname);
                 ui.label("Password");
                 ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
-                if ui.button("Register").clicked() {
+                let login_busy = self.login_rx.is_some();
+                if ui
+                    .add_enabled(!login_busy, egui::Button::new("Register"))
+                    .clicked()
+                {
                     self.register_or_login(true);
                 }
-                if ui.button("Login").clicked() {
+                if ui
+                    .add_enabled(!login_busy, egui::Button::new("Login"))
+                    .clicked()
+                {
                     self.register_or_login(false);
                 }
             }
@@ -683,4 +687,52 @@ fn runtime() -> tokio::runtime::Runtime {
         .enable_all()
         .build()
         .expect("runtime")
+}
+
+fn run_login_flow(
+    create: bool,
+    nickname: String,
+    password: String,
+    server_input: String,
+) -> Result<LoginSuccess, String> {
+    let config = ClientConfig::for_server(&server_input);
+    let normalized_server = config.http_base.clone();
+    let core = ClientCore::new(config);
+    let rt = runtime();
+
+    if create {
+        match rt.block_on(core.register_user(nickname.clone(), password.clone())) {
+            Ok(true) => {}
+            Ok(false) => {}
+            Err(err) => return Err(format!("Account create failed: {err}")),
+        }
+    }
+
+    match rt.block_on(core.login_user(nickname.clone(), password.clone())) {
+        Ok(true) => {}
+        Ok(false) => return Err("Invalid credentials".to_string()),
+        Err(err) => return Err(format!("User login failed: {err}")),
+    }
+
+    core.unlock_local_storage(password.clone());
+    let history = ChatHistory::load(Some(&password));
+    let local_keys = core.load_or_create_local_device_keys();
+    let req = core
+        .build_register_request(nickname.clone(), DEFAULT_DEVICE_ID.to_string(), &local_keys)
+        .map_err(|err| format!("Register failed: {err}"))?;
+    if let Err(err) = rt.block_on(core.register_device(req)) {
+        return Err(format!("Register failed: {err}"));
+    }
+    let auth = rt
+        .block_on(core.login_device(nickname.clone(), DEFAULT_DEVICE_ID.to_string()))
+        .map_err(|err| format!("Login failed: {err}"))?;
+
+    Ok(LoginSuccess {
+        core,
+        local_keys,
+        history,
+        auth,
+        server_input: normalized_server,
+        status: format!("Logged in as {nickname}"),
+    })
 }
