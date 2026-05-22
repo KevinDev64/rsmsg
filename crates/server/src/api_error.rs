@@ -20,6 +20,11 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if self.status.is_server_error() {
+            tracing::error!(status = %self.status, message = self.message, "api error");
+        } else {
+            tracing::warn!(status = %self.status, message = self.message, "api error");
+        }
         (self.status, Json(json!({ "error": self.message }))).into_response()
     }
 }

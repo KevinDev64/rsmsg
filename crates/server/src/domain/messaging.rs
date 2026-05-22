@@ -56,12 +56,28 @@ pub async fn send_message(
         .decode(payload.envelope_b64)
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid envelope"))?;
     if auth_device != from_device {
+        tracing::warn!(%auth_device, %from_device, "send_message rejected: sender mismatch");
         return Err(ApiError::new(StatusCode::FORBIDDEN, "device mismatch"));
+    }
+
+    let recipient_exists = devices::device_exists(db, to_device).await.map_err(|err| {
+        tracing::error!(error = %err, %to_device, "send_message recipient lookup failed");
+        ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+    })?;
+    if !recipient_exists {
+        tracing::warn!(%from_device, %to_device, "send_message rejected: recipient device not found");
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "recipient device not found",
+        ));
     }
 
     let rows = messages::insert_message(db, payload.message_id, from_device, to_device, envelope)
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|err| {
+            tracing::error!(error = %err, %from_device, %to_device, "send_message insert failed");
+            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        })?;
     Ok(SendMessageResponse {
         accepted: rows == 1,
     })
