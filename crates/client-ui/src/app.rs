@@ -31,6 +31,7 @@ pub struct MessengerApp {
     message_input: String,
     key_change_peer: Option<String>,
     login_rx: Option<Receiver<LoginResult>>,
+    open_chat_rx: Option<Receiver<OpenChatResult>>,
     last_sync_at: Instant,
 }
 
@@ -45,6 +46,16 @@ struct LoginSuccess {
     auth: DeviceAuth,
     server_input: String,
     status: String,
+}
+
+struct OpenChatResult {
+    result: Result<OpenChatSuccess, String>,
+}
+
+struct OpenChatSuccess {
+    peer: String,
+    resolved_uuid: String,
+    bundle: FetchPrekeyBundleResponse,
 }
 
 impl MessengerApp {
@@ -67,6 +78,7 @@ impl MessengerApp {
             message_input: String::new(),
             key_change_peer: None,
             login_rx: None,
+            open_chat_rx: None,
             last_sync_at: Instant::now(),
         }
     }
@@ -140,7 +152,10 @@ impl MessengerApp {
     }
 
     fn open_chat(&mut self) {
-        let Some(auth) = self.auth.clone() else {
+        if self.open_chat_rx.is_some() {
+            return;
+        }
+        let Some(_auth) = self.auth.clone() else {
             self.status = "Log in first".to_string();
             return;
         };
@@ -149,48 +164,58 @@ impl MessengerApp {
             return;
         }
         let peer = self.peer_nickname_input.trim().to_string();
-        let rt = runtime();
-
-        let resolved = rt.block_on(
-            self.core
-                .resolve_user_device(peer.clone(), DEFAULT_DEVICE_ID.to_string()),
-        );
-        let Ok(resolved_uuid) = resolved else {
-            self.status = "Peer not found".to_string();
+        let Some(local_keys) = self.local_keys.clone() else {
+            self.status = "Log in first".to_string();
             return;
         };
+        let (tx, rx) = mpsc::channel();
+        self.open_chat_rx = Some(rx);
+        self.status = format!("Opening chat with @{peer}...");
+        let core = self.core.clone();
+        thread::spawn(move || {
+            let result = run_open_chat_flow(core, local_keys, peer);
+            let _ = tx.send(OpenChatResult { result });
+        });
+    }
 
-        let derive = rt.block_on(self.core.derive_peer_shared_key(
-            self.local_keys.as_ref().expect("local keys"),
-            peer.clone(),
-            DEFAULT_DEVICE_ID.to_string(),
-        ));
-        match derive {
-            Ok((_key, bundle)) => {
-                if bundle.device_uuid != resolved_uuid {
-                    self.status = "Peer resolve mismatch, retry".to_string();
-                    return;
-                }
-                if !self.verify_or_pin_peer_identity(&peer, &bundle) {
-                    return;
-                }
-                self.selected_chat = peer.clone();
-                self.history.chats.entry(peer.clone()).or_default();
-                self.history
-                    .peer_by_device_uuid
-                    .insert(resolved_uuid.clone(), peer.clone());
-                self.history
-                    .device_uuid_by_peer
-                    .insert(peer.clone(), resolved_uuid);
-                self.mark_selected_chat_read(&rt, &auth);
-                self.save_history();
-                self.status = format!("Chat with @{peer} ready");
-            }
-            Err(err) => {
-                self.status = format!("Open chat failed: {err}");
-                let _ = auth;
+    fn poll_open_chat_result(&mut self) {
+        let Some(rx) = self.open_chat_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(opened) => match opened.result {
+                Ok(success) => self.apply_open_chat_success(success),
+                Err(err) => self.status = err,
+            },
+            Err(mpsc::TryRecvError::Empty) => self.open_chat_rx = Some(rx),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Open chat worker stopped".to_string();
             }
         }
+    }
+
+    fn apply_open_chat_success(&mut self, success: OpenChatSuccess) {
+        if success.bundle.device_uuid != success.resolved_uuid {
+            self.status = "Peer resolve mismatch, retry".to_string();
+            return;
+        }
+        if !self.verify_or_pin_peer_identity(&success.peer, &success.bundle) {
+            return;
+        }
+        self.selected_chat = success.peer.clone();
+        self.history.chats.entry(success.peer.clone()).or_default();
+        self.history
+            .peer_by_device_uuid
+            .insert(success.resolved_uuid.clone(), success.peer.clone());
+        self.history
+            .device_uuid_by_peer
+            .insert(success.peer.clone(), success.resolved_uuid);
+        if let Some(auth) = self.auth.clone() {
+            let rt = runtime();
+            self.mark_selected_chat_read(&rt, &auth);
+        }
+        self.save_history();
+        self.status = format!("Chat with @{} ready", success.peer);
     }
 
     fn search_users(&mut self) {
@@ -530,6 +555,7 @@ impl MessengerApp {
 impl eframe::App for MessengerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_login_result();
+        self.poll_open_chat_result();
         ctx.request_repaint_after(Duration::from_millis(800));
         if self.auth.is_some() && self.last_sync_at.elapsed() >= Duration::from_secs(2) {
             self.sync_incoming();
@@ -734,5 +760,28 @@ fn run_login_flow(
         auth,
         server_input: normalized_server,
         status: format!("Logged in as {nickname}"),
+    })
+}
+
+fn run_open_chat_flow(
+    core: ClientCore,
+    local_keys: LocalDeviceKeys,
+    peer: String,
+) -> Result<OpenChatSuccess, String> {
+    let rt = runtime();
+    let resolved_uuid = rt
+        .block_on(core.resolve_user_device(peer.clone(), DEFAULT_DEVICE_ID.to_string()))
+        .map_err(|err| format!("Peer not found: {err}"))?;
+    let (_key, bundle) = rt
+        .block_on(core.derive_peer_shared_key(
+            &local_keys,
+            peer.clone(),
+            DEFAULT_DEVICE_ID.to_string(),
+        ))
+        .map_err(|err| format!("Open chat failed: {err}"))?;
+    Ok(OpenChatSuccess {
+        peer,
+        resolved_uuid,
+        bundle,
     })
 }
