@@ -3,13 +3,13 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{HeaderMap, HeaderValue};
 use shared::{
     AckMessageRequest, DeviceLoginRequest, DeviceLoginResponse, DeviceLogoutRequest,
-    DeviceLogoutResponse, FetchBlobRequest, FetchBlobResponse, FetchPendingRequest,
-    FetchPendingResponse, FetchPrekeyBundleRequest, FetchPrekeyBundleResponse,
-    MessageStatusRequest, MessageStatusResponse, RegisterDeviceRequest, RegisterDeviceResponse,
-    ResolveDeviceRequest, ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse,
-    SendMessageRequest, SendMessageResponse, UploadBlobRequest, UploadBlobResponse,
-    UploadPrekeysRequest, UploadPrekeysResponse, UserLoginRequest, UserLoginResponse,
-    UserRegisterRequest, UserRegisterResponse, UserSearchRequest, UserSearchResponse,
+    DeviceLogoutResponse, FetchBlobRequest, FetchPendingRequest, FetchPendingResponse,
+    FetchPrekeyBundleRequest, FetchPrekeyBundleResponse, MessageStatusRequest,
+    MessageStatusResponse, RegisterDeviceRequest, RegisterDeviceResponse, ResolveDeviceRequest,
+    ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse, SendMessageRequest,
+    SendMessageResponse, UploadBlobResponse, UploadPrekeysRequest, UploadPrekeysResponse,
+    UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserRegisterResponse,
+    UserSearchRequest, UserSearchResponse,
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -255,39 +255,35 @@ impl ApiTransport {
         Ok(response.json().await?)
     }
 
-    pub async fn upload_blob(
+    pub async fn upload_blob_bytes(
         &self,
         auth: &DeviceAuth,
-        data_b64: String,
+        data: Vec<u8>,
     ) -> Result<UploadBlobResponse> {
-        let url = format!("{}/v1/upload_blob", self.cfg.http_base);
-        let encoded_len = data_b64.len();
+        let url = format!("{}/v1/upload_blob_bytes", self.cfg.http_base);
+        let bytes_len = data.len();
         let response = self
             .client
             .post(url)
             .headers(self.auth_headers(auth)?)
-            .json(&UploadBlobRequest { data_b64 })
+            .body(data)
             .send()
             .await
             .map_err(|err| {
-                anyhow!("upload_blob request failed, encoded_len={encoded_len}: {err:#}")
+                anyhow!("upload_blob_bytes request failed, bytes_len={bytes_len}: {err:#}")
             })?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(anyhow!(
-                "upload_blob failed with {status}, encoded_len={encoded_len}: {body}"
+                "upload_blob_bytes failed with {status}, bytes_len={bytes_len}: {body}"
             ));
         }
         Ok(response.json().await?)
     }
 
-    pub async fn fetch_blob(
-        &self,
-        auth: &DeviceAuth,
-        blob_id: String,
-    ) -> Result<FetchBlobResponse> {
-        let url = format!("{}/v1/fetch_blob", self.cfg.http_base);
+    pub async fn fetch_blob_bytes(&self, auth: &DeviceAuth, blob_id: String) -> Result<Vec<u8>> {
+        let url = format!("{}/v1/fetch_blob_bytes", self.cfg.http_base);
         let response = self
             .client
             .post(url)
@@ -296,9 +292,12 @@ impl ApiTransport {
             .send()
             .await?;
         if !response.status().is_success() {
-            return Err(anyhow!("fetch_blob failed with {}", response.status()));
+            return Err(anyhow!(
+                "fetch_blob_bytes failed with {}",
+                response.status()
+            ));
         }
-        Ok(response.json().await?)
+        Ok(response.bytes().await?.to_vec())
     }
 
     pub async fn ws_once(&self, auth: &DeviceAuth) -> Result<Vec<PendingEnvelope>> {

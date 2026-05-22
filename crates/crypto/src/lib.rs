@@ -115,6 +115,10 @@ impl CryptoEngine {
     }
 
     pub fn encrypt_bytes_to_b64(&self, key_b64: &str, plaintext: &[u8]) -> Result<String> {
+        Ok(STANDARD.encode(self.encrypt_bytes(key_b64, plaintext)?))
+    }
+
+    pub fn encrypt_bytes(&self, key_b64: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
         let key = decode_key(key_b64)?;
         let cipher = XChaCha20Poly1305::new(GenericArray::from_slice(&key));
         let mut nonce_bytes = [0_u8; 24];
@@ -125,7 +129,7 @@ impl CryptoEngine {
             .encrypt(nonce, plaintext)
             .map_err(|_| anyhow!("encryption failed"))?;
         out.extend_from_slice(&ciphertext);
-        Ok(STANDARD.encode(out))
+        Ok(out)
     }
 
     pub fn decrypt_text_from_b64(&self, key_b64: &str, envelope_b64: &str) -> Result<String> {
@@ -134,11 +138,15 @@ impl CryptoEngine {
     }
 
     pub fn decrypt_bytes_from_b64(&self, key_b64: &str, envelope_b64: &str) -> Result<Vec<u8>> {
-        let key = decode_key(key_b64)?;
-        let cipher = XChaCha20Poly1305::new(GenericArray::from_slice(&key));
         let envelope = STANDARD
             .decode(envelope_b64)
             .map_err(|_| anyhow!("invalid envelope base64"))?;
+        self.decrypt_bytes(key_b64, &envelope)
+    }
+
+    pub fn decrypt_bytes(&self, key_b64: &str, envelope: &[u8]) -> Result<Vec<u8>> {
+        let key = decode_key(key_b64)?;
+        let cipher = XChaCha20Poly1305::new(GenericArray::from_slice(&key));
         if envelope.len() < 24 {
             return Err(anyhow!("invalid envelope length"));
         }

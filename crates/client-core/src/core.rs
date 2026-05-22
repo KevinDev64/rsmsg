@@ -306,8 +306,11 @@ impl ClientCore {
         message_id: String,
     ) -> Result<bool> {
         let file_key_b64 = self.crypto.generate_shared_key_b64();
-        let encrypted_blob_b64 = self.crypto.encrypt_bytes_to_b64(&file_key_b64, &data)?;
-        let uploaded = self.transport.upload_blob(auth, encrypted_blob_b64).await?;
+        let encrypted_blob = self.crypto.encrypt_bytes(&file_key_b64, &data)?;
+        let uploaded = self
+            .transport
+            .upload_blob_bytes(auth, encrypted_blob)
+            .await?;
         let payload = EncryptedMessagePayload::File {
             v: 2,
             file_name,
@@ -327,9 +330,8 @@ impl ClientCore {
         blob_id: String,
         file_key_b64: String,
     ) -> Result<Vec<u8>> {
-        let blob = self.transport.fetch_blob(auth, blob_id).await?;
-        self.crypto
-            .decrypt_bytes_from_b64(&file_key_b64, &blob.data_b64)
+        let blob = self.transport.fetch_blob_bytes(auth, blob_id).await?;
+        self.crypto.decrypt_bytes(&file_key_b64, &blob)
     }
 
     pub fn has_peer_session(&self, peer_device_uuid: &str) -> bool {
