@@ -172,6 +172,12 @@ impl MessengerApp {
         self.local_keys = self.core.load_or_create_local_device_keys();
     }
 
+    fn logout(&mut self) {
+        self.auth = None;
+        self.password.clear();
+        self.status = "Logged out".to_string();
+    }
+
     fn open_chat(&mut self) {
         let Some(auth) = self.auth.clone() else {
             self.status = "Log in first".to_string();
@@ -401,15 +407,25 @@ impl eframe::App for MessengerApp {
 
         egui::SidePanel::left("left").show(ctx, |ui| {
             ui.heading("Account");
-            ui.label("Nickname");
-            ui.text_edit_singleline(&mut self.nickname);
-            ui.label("Password");
-            ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
-            if ui.button("Register").clicked() {
-                self.register_or_login(true);
-            }
-            if ui.button("Login").clicked() {
-                self.register_or_login(false);
+            if self.auth.is_some() {
+                ui.label(format!("@{}", self.nickname));
+                ui.label(&self.server_input);
+                if ui.button("Logout").clicked() {
+                    self.logout();
+                }
+            } else {
+                ui.label("Server");
+                ui.text_edit_singleline(&mut self.server_input);
+                ui.label("Nickname");
+                ui.text_edit_singleline(&mut self.nickname);
+                ui.label("Password");
+                ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
+                if ui.button("Register").clicked() {
+                    self.register_or_login(true);
+                }
+                if ui.button("Login").clicked() {
+                    self.register_or_login(false);
+                }
             }
 
             ui.separator();
