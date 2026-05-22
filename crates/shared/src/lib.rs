@@ -8,7 +8,9 @@ pub struct RegisterDeviceRequest {
     pub user_id: String,
     pub device_id: String,
     pub identity_key_b64: String,
+    pub signing_identity_key_b64: String,
     pub signed_prekey_b64: String,
+    pub signed_prekey_signature_b64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,7 +45,9 @@ pub struct FetchPrekeyBundleRequest {
 pub struct FetchPrekeyBundleResponse {
     pub device_uuid: String,
     pub identity_key_b64: String,
+    pub signing_identity_key_b64: String,
     pub signed_prekey_b64: String,
+    pub signed_prekey_signature_b64: String,
     pub one_time_prekey: Option<PrekeyUploadItem>,
 }
 

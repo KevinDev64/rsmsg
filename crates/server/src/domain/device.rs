@@ -19,16 +19,24 @@ pub async fn register_device(
     let identity_key = STANDARD
         .decode(payload.identity_key_b64)
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid identity key"))?;
+    let signing_identity_key = STANDARD
+        .decode(payload.signing_identity_key_b64)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid signing identity key"))?;
     let signed_prekey = STANDARD
         .decode(payload.signed_prekey_b64)
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid signed prekey"))?;
+    let signed_prekey_signature = STANDARD
+        .decode(payload.signed_prekey_signature_b64)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid signed prekey signature"))?;
 
     let device_uuid = devices::upsert_device(
         db,
         payload.user_id,
         payload.device_id,
         identity_key,
+        signing_identity_key,
         signed_prekey,
+        signed_prekey_signature,
     )
     .await
     .map_err(|err| ApiError::database("register_device upsert failed", err))?;

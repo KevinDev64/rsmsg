@@ -35,7 +35,9 @@ pub async fn fetch_prekey_bundle(
     Ok(FetchPrekeyBundleResponse {
         device_uuid: device.0.to_string(),
         identity_key_b64: STANDARD.encode(device.1),
-        signed_prekey_b64: STANDARD.encode(device.2),
+        signing_identity_key_b64: STANDARD.encode(device.2),
+        signed_prekey_b64: STANDARD.encode(device.3),
+        signed_prekey_signature_b64: STANDARD.encode(device.4),
         one_time_prekey: one_time.map(|(key_id, pubkey)| PrekeyUploadItem {
             key_id,
             pubkey_b64: STANDARD.encode(pubkey),

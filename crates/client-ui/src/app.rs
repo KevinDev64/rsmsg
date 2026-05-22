@@ -87,11 +87,17 @@ impl MessengerApp {
             }
         }
 
-        let req = self.core.build_register_request(
+        let req = match self.core.build_register_request(
             self.nickname.clone(),
             DEFAULT_DEVICE_ID.to_string(),
             &self.local_keys,
-        );
+        ) {
+            Ok(req) => req,
+            Err(err) => {
+                self.status = format!("Register failed: {err}");
+                return;
+            }
+        };
         if let Err(err) = rt.block_on(self.core.register_device(req)) {
             self.status = format!("Register failed: {err}");
             return;

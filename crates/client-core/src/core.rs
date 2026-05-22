@@ -48,16 +48,27 @@ impl ClientCore {
     pub fn generate_local_device_keys(&self) -> LocalDeviceKeys {
         let identity = self.crypto.generate_x25519_keypair();
         let signed = self.crypto.generate_x25519_keypair();
+        let signing = self.crypto.generate_ed25519_keypair();
         LocalDeviceKeys {
             identity_private_b64: identity.private_b64,
             identity_public_b64: identity.public_b64,
+            signing_identity_private_b64: Some(signing.private_b64),
+            signing_identity_public_b64: Some(signing.public_b64),
             signed_prekey_private_b64: signed.private_b64,
             signed_prekey_public_b64: signed.public_b64,
         }
     }
 
     pub fn load_or_create_local_device_keys(&self) -> LocalDeviceKeys {
-        if let Some(keys) = key_store::load(&self.key_store_path) {
+        if let Some(mut keys) = key_store::load(&self.key_store_path) {
+            if keys.signing_identity_private_b64.is_none()
+                || keys.signing_identity_public_b64.is_none()
+            {
+                let signing = self.crypto.generate_ed25519_keypair();
+                keys.signing_identity_private_b64 = Some(signing.private_b64);
+                keys.signing_identity_public_b64 = Some(signing.public_b64);
+                let _ = key_store::save(&self.key_store_path, &keys);
+            }
             return keys;
         }
         let keys = self.generate_local_device_keys();
@@ -70,13 +81,26 @@ impl ClientCore {
         user_id: String,
         device_id: String,
         keys: &LocalDeviceKeys,
-    ) -> RegisterDeviceRequest {
-        RegisterDeviceRequest {
+    ) -> Result<RegisterDeviceRequest> {
+        let signing_private = keys
+            .signing_identity_private_b64
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("missing signing identity private key"))?;
+        let signing_public = keys
+            .signing_identity_public_b64
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("missing signing identity public key"))?;
+        let signature = self
+            .crypto
+            .sign_prekey_b64(signing_private, &keys.signed_prekey_public_b64)?;
+        Ok(RegisterDeviceRequest {
             user_id,
             device_id,
             identity_key_b64: keys.identity_public_b64.clone(),
+            signing_identity_key_b64: signing_public.to_string(),
             signed_prekey_b64: keys.signed_prekey_public_b64.clone(),
-        }
+            signed_prekey_signature_b64: signature,
+        })
     }
 
     pub async fn register_device(&self, req: RegisterDeviceRequest) -> Result<String> {
@@ -261,6 +285,11 @@ impl ClientCore {
             .transport
             .fetch_prekey_bundle(peer_user_id, peer_device_id)
             .await?;
+        self.crypto.verify_prekey_signature_b64(
+            &bundle.signing_identity_key_b64,
+            &bundle.signed_prekey_b64,
+            &bundle.signed_prekey_signature_b64,
+        )?;
         let key_b64 = self
             .crypto
             .derive_shared_key_b64(&local_keys.identity_private_b64, &bundle.identity_key_b64)?;

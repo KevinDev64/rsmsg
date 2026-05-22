@@ -71,6 +71,10 @@ pub struct OutgoingMessageStatus {
 pub struct LocalDeviceKeys {
     pub identity_private_b64: String,
     pub identity_public_b64: String,
+    #[serde(default)]
+    pub signing_identity_private_b64: Option<String>,
+    #[serde(default)]
+    pub signing_identity_public_b64: Option<String>,
     pub signed_prekey_private_b64: String,
     pub signed_prekey_public_b64: String,
 }

@@ -4,6 +4,7 @@ use chacha20poly1305::{
     KeyInit, XChaCha20Poly1305, XNonce,
     aead::{Aead, generic_array::GenericArray},
 };
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
 use rand::{RngCore, rngs::OsRng};
 use sha2::Sha256;
@@ -12,6 +13,11 @@ use x25519_dalek::{PublicKey, StaticSecret};
 pub struct CryptoEngine;
 
 pub struct X25519KeyPair {
+    pub private_b64: String,
+    pub public_b64: String,
+}
+
+pub struct Ed25519KeyPair {
     pub private_b64: String,
     pub public_b64: String,
 }
@@ -38,6 +44,51 @@ impl CryptoEngine {
             private_b64: STANDARD.encode(secret.to_bytes()),
             public_b64: STANDARD.encode(public.as_bytes()),
         }
+    }
+
+    pub fn generate_ed25519_keypair(&self) -> Ed25519KeyPair {
+        let signing = SigningKey::generate(&mut OsRng);
+        let verifying = signing.verifying_key();
+        Ed25519KeyPair {
+            private_b64: STANDARD.encode(signing.to_bytes()),
+            public_b64: STANDARD.encode(verifying.to_bytes()),
+        }
+    }
+
+    pub fn sign_prekey_b64(
+        &self,
+        signing_private_b64: &str,
+        prekey_public_b64: &str,
+    ) -> Result<String> {
+        let private = decode_key(signing_private_b64)?;
+        let prekey = STANDARD
+            .decode(prekey_public_b64)
+            .map_err(|_| anyhow!("invalid prekey base64"))?;
+        let signing = SigningKey::from_bytes(&private);
+        let signature = signing.sign(&prekey_signature_payload(&prekey));
+        Ok(STANDARD.encode(signature.to_bytes()))
+    }
+
+    pub fn verify_prekey_signature_b64(
+        &self,
+        signing_public_b64: &str,
+        prekey_public_b64: &str,
+        signature_b64: &str,
+    ) -> Result<()> {
+        let public = decode_key(signing_public_b64)?;
+        let prekey = STANDARD
+            .decode(prekey_public_b64)
+            .map_err(|_| anyhow!("invalid prekey base64"))?;
+        let signature_bytes = STANDARD
+            .decode(signature_b64)
+            .map_err(|_| anyhow!("invalid signature base64"))?;
+        let verifying =
+            VerifyingKey::from_bytes(&public).map_err(|_| anyhow!("invalid signing public key"))?;
+        let signature = Signature::from_slice(&signature_bytes)
+            .map_err(|_| anyhow!("invalid prekey signature"))?;
+        verifying
+            .verify(&prekey_signature_payload(&prekey), &signature)
+            .map_err(|_| anyhow!("invalid prekey signature"))
     }
 
     pub fn derive_shared_key_b64(
@@ -88,6 +139,12 @@ impl CryptoEngine {
             .map_err(|_| anyhow!("decryption failed"))?;
         Ok(String::from_utf8(plaintext).map_err(|_| anyhow!("invalid utf8 payload"))?)
     }
+}
+
+fn prekey_signature_payload(prekey_public: &[u8]) -> Vec<u8> {
+    let mut payload = b"rsmsg-signed-prekey-v1".to_vec();
+    payload.extend_from_slice(prekey_public);
+    payload
 }
 
 fn decode_key(key_b64: &str) -> Result<[u8; 32]> {

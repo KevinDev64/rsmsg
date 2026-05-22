@@ -5,19 +5,23 @@ pub async fn upsert_device(
     user_id: String,
     device_id: String,
     identity_key: Vec<u8>,
+    signing_identity_key: Vec<u8>,
     signed_prekey: Vec<u8>,
+    signed_prekey_signature: Vec<u8>,
 ) -> Result<Uuid, sqlx::Error> {
     sqlx::query_scalar::<_, Uuid>(
-        "INSERT INTO devices (user_id, device_id, identity_key, signed_prekey) \
-         VALUES ($1, $2, $3, $4) \
+        "INSERT INTO devices (user_id, device_id, identity_key, signing_identity_key, signed_prekey, signed_prekey_signature) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
          ON CONFLICT (user_id, device_id) \
-         DO UPDATE SET identity_key = EXCLUDED.identity_key, signed_prekey = EXCLUDED.signed_prekey \
+         DO UPDATE SET identity_key = EXCLUDED.identity_key, signing_identity_key = EXCLUDED.signing_identity_key, signed_prekey = EXCLUDED.signed_prekey, signed_prekey_signature = EXCLUDED.signed_prekey_signature \
          RETURNING id",
     )
     .bind(user_id)
     .bind(device_id)
     .bind(identity_key)
+    .bind(signing_identity_key)
     .bind(signed_prekey)
+    .bind(signed_prekey_signature)
     .fetch_one(db)
     .await
 }
@@ -38,9 +42,9 @@ pub async fn find_device_bundle(
     db: &sqlx::PgPool,
     user_id: String,
     device_id: String,
-) -> Result<Option<(Uuid, Vec<u8>, Vec<u8>)>, sqlx::Error> {
-    sqlx::query_as::<_, (Uuid, Vec<u8>, Vec<u8>)>(
-        "SELECT id, identity_key, signed_prekey FROM devices WHERE user_id = $1 AND device_id = $2",
+) -> Result<Option<(Uuid, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)>, sqlx::Error> {
+    sqlx::query_as::<_, (Uuid, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)>(
+        "SELECT id, identity_key, signing_identity_key, signed_prekey, signed_prekey_signature FROM devices WHERE user_id = $1 AND device_id = $2",
     )
     .bind(user_id)
     .bind(device_id)
