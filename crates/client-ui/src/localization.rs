@@ -12,6 +12,8 @@ impl Localization {
         let fallback = load_language_file("en").unwrap_or_else(embedded_en);
         let current = if language == "en" {
             fallback.clone()
+        } else if language == "ru" {
+            load_language_file(&language).unwrap_or_else(embedded_ru)
         } else {
             load_language_file(&language).unwrap_or_default()
         };
@@ -36,7 +38,9 @@ fn normalize_language(language: &str) -> String {
 
 fn load_language_file(language: &str) -> Option<BTreeMap<String, String>> {
     for path in locale_paths(language) {
-        let raw = fs::read_to_string(path).ok()?;
+        let Ok(raw) = fs::read_to_string(path) else {
+            continue;
+        };
         if let Ok(map) = serde_json::from_str::<BTreeMap<String, String>>(&raw) {
             return Some(map);
         }
@@ -53,4 +57,8 @@ fn locale_paths(language: &str) -> Vec<PathBuf> {
 
 fn embedded_en() -> BTreeMap<String, String> {
     serde_json::from_str(include_str!("../locales/en.json")).unwrap_or_default()
+}
+
+fn embedded_ru() -> BTreeMap<String, String> {
+    serde_json::from_str(include_str!("../locales/ru.json")).unwrap_or_default()
 }

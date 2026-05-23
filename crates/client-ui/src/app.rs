@@ -148,6 +148,14 @@ impl MessengerApp {
             .replace("nickname already exists", &self.t("error.nickname_exists"))
     }
 
+    fn language_label(&self, language: AppLanguage) -> String {
+        match language {
+            AppLanguage::System => self.t("settings.language_system"),
+            AppLanguage::English => self.t("settings.language_en"),
+            AppLanguage::Russian => self.t("settings.language_ru"),
+        }
+    }
+
     pub fn new() -> Self {
         let settings = AppSettings::load();
         let localization = Localization::load(settings.language.code());
@@ -1296,34 +1304,43 @@ impl MessengerApp {
 
                 ui.separator();
                 ui.heading(self.t("settings.language"));
+                let selected_language = self.language_label(self.settings.language);
                 let language_system = self.t("settings.language_system");
                 let language_en = self.t("settings.language_en");
                 let language_ru = self.t("settings.language_ru");
-                let mut language_changed = false;
-                language_changed |= ui
-                    .radio_value(
-                        &mut self.settings.language,
-                        AppLanguage::System,
-                        language_system,
-                    )
-                    .changed();
-                language_changed |= ui
-                    .radio_value(
-                        &mut self.settings.language,
-                        AppLanguage::English,
-                        language_en,
-                    )
-                    .changed();
-                language_changed |= ui
-                    .radio_value(
-                        &mut self.settings.language,
-                        AppLanguage::Russian,
-                        language_ru,
-                    )
-                    .changed();
+                let language_changed = egui::ComboBox::from_id_salt("language_select")
+                    .selected_text(selected_language)
+                    .show_ui(ui, |ui| {
+                        let mut changed = false;
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.settings.language,
+                                AppLanguage::System,
+                                language_system,
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.settings.language,
+                                AppLanguage::English,
+                                language_en,
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.settings.language,
+                                AppLanguage::Russian,
+                                language_ru,
+                            )
+                            .changed();
+                        changed
+                    })
+                    .inner
+                    .unwrap_or(false);
                 if language_changed {
                     self.localization = Localization::load(self.settings.language.code());
                     self.settings.save();
+                    self.status = self.t("settings.language_updated");
                 }
 
                 ui.separator();
