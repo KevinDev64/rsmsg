@@ -60,6 +60,7 @@
   "status.file_too_large": "Файл слишком большой. Лимит 100 MB",
   "status.found_users": "Найдено пользователей: {count}",
   "status.login_worker_stopped": "Задача входа остановилась",
+  "status.logged_in_as": "Вы вошли как {nickname}",
   "status.logged_out": "Вы вышли",
   "status.no_users_found": "Пользователи не найдены",
   "status.open_chat_worker_stopped": "Задача открытия чата остановилась",

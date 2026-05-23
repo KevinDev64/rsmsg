@@ -214,8 +214,9 @@ impl MessengerApp {
         let nickname = self.nickname.clone();
         let password = self.password.clone();
         let server_input = self.server_input.clone();
+        let language = self.settings.language.code().to_string();
         thread::spawn(move || {
-            let result = run_login_flow(create, nickname, password, server_input, None);
+            let result = run_login_flow(create, nickname, password, server_input, None, language);
             let _ = tx.send(LoginResult { result });
         });
     }
@@ -239,8 +240,16 @@ impl MessengerApp {
         let password = self.register_password.clone();
         let invite_code = self.register_invite_code.trim().to_string();
         let server_input = self.server_input.clone();
+        let language = self.settings.language.code().to_string();
         thread::spawn(move || {
-            let result = run_login_flow(true, nickname, password, server_input, Some(invite_code));
+            let result = run_login_flow(
+                true,
+                nickname,
+                password,
+                server_input,
+                Some(invite_code),
+                language,
+            );
             let _ = tx.send(LoginResult { result });
         });
     }
@@ -1464,6 +1473,7 @@ fn run_login_flow(
     password: String,
     server_input: String,
     invite_code: Option<String>,
+    language: String,
 ) -> Result<LoginSuccess, String> {
     let config = ClientConfig::for_server(&server_input);
     let normalized_server = config.http_base.clone();
@@ -1498,6 +1508,10 @@ fn run_login_flow(
         .block_on(core.login_device(nickname.clone(), DEFAULT_DEVICE_ID.to_string()))
         .map_err(|err| format!("Login failed: {err}"))?;
 
+    let localization = Localization::load(&language);
+    let status = localization
+        .text("status.logged_in_as")
+        .replace("{nickname}", &nickname);
     Ok(LoginSuccess {
         core,
         local_keys,
@@ -1506,7 +1520,7 @@ fn run_login_flow(
         nickname: nickname.clone(),
         password,
         server_input: normalized_server,
-        status: format!("Logged in as {nickname}"),
+        status,
     })
 }
 

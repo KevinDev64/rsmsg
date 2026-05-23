@@ -60,6 +60,7 @@
   "status.file_too_large": "File is too large. Limit is 100 MB",
   "status.found_users": "Found {count} users",
   "status.login_worker_stopped": "Login worker stopped",
+  "status.logged_in_as": "Logged in as {nickname}",
   "status.logged_out": "Logged out",
   "status.no_users_found": "No users found",
   "status.open_chat_worker_stopped": "Open chat worker stopped",
