@@ -17,8 +17,9 @@ use uuid::Uuid;
 
 use crate::{
     history::{ChatHistory, ChatMessage, MessageStatus, now_ms},
+    localization::Localization,
     message_ui::render_message_bubble,
-    settings::{AppSettings, AppTheme},
+    settings::{AppLanguage, AppSettings, AppTheme},
 };
 
 const DEFAULT_DEVICE_ID: &str = "main";
@@ -34,6 +35,7 @@ pub struct MessengerApp {
     auth: Option<DeviceAuth>,
     status: String,
     settings: AppSettings,
+    localization: Localization,
     settings_open: bool,
     create_account_open: bool,
     register_nickname: String,
@@ -128,8 +130,27 @@ struct TrustResult {
 }
 
 impl MessengerApp {
+    fn t(&self, key: &str) -> String {
+        self.localization.text(key)
+    }
+
+    fn tf(&self, key: &str, values: &[(&str, &str)]) -> String {
+        let mut text = self.t(key);
+        for (name, value) in values {
+            text = text.replace(&format!("{{{name}}}"), value);
+        }
+        text
+    }
+
+    fn localize_status_error(&self, error: &str) -> String {
+        error
+            .replace("invite code already used", &self.t("error.invite_used"))
+            .replace("nickname already exists", &self.t("error.nickname_exists"))
+    }
+
     pub fn new() -> Self {
         let settings = AppSettings::load();
+        let localization = Localization::load(settings.language.code());
         let config = ClientConfig::local_default();
         let server_input = config.http_base.clone();
         let core = ClientCore::new(config);
@@ -142,8 +163,9 @@ impl MessengerApp {
             nickname,
             password: String::new(),
             auth: None,
-            status: "Not logged in".to_string(),
+            status: localization.text("status.not_logged_in"),
             settings,
+            localization,
             settings_open: false,
             create_account_open: false,
             register_nickname: String::new(),
@@ -171,15 +193,15 @@ impl MessengerApp {
             return;
         }
         if self.nickname.trim().is_empty() || self.password.len() < 6 {
-            self.status = "Enter nickname and password (>=6)".to_string();
+            self.status = self.t("error.enter_nickname_password");
             return;
         }
         let (tx, rx) = mpsc::channel();
         self.login_rx = Some(rx);
         self.status = if create {
-            "Creating account...".to_string()
+            self.t("status.creating_account")
         } else {
-            "Logging in...".to_string()
+            self.t("status.logging_in")
         };
         let nickname = self.nickname.clone();
         let password = self.password.clone();
@@ -195,16 +217,16 @@ impl MessengerApp {
             return;
         }
         if self.register_nickname.trim().is_empty() || self.register_password.len() < 6 {
-            self.status = "Enter nickname and password (>=6)".to_string();
+            self.status = self.t("error.enter_nickname_password");
             return;
         }
         if self.register_invite_code.trim().is_empty() {
-            self.status = "Enter invite code".to_string();
+            self.status = self.t("error.enter_invite");
             return;
         }
         let (tx, rx) = mpsc::channel();
         self.login_rx = Some(rx);
-        self.status = "Creating account...".to_string();
+        self.status = self.t("status.creating_account");
         let nickname = self.register_nickname.trim().to_string();
         let password = self.register_password.clone();
         let invite_code = self.register_invite_code.trim().to_string();
@@ -238,13 +260,13 @@ impl MessengerApp {
                         self.settings.save();
                     }
                 }
-                Err(err) => self.status = err,
+                Err(err) => self.status = self.localize_status_error(&err),
             },
             Err(mpsc::TryRecvError::Empty) => {
                 self.login_rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.status = "Login worker stopped".to_string();
+                self.status = self.t("status.login_worker_stopped");
             }
         }
     }
@@ -268,7 +290,7 @@ impl MessengerApp {
         self.local_keys = None;
         self.history = ChatHistory::load(None);
         self.password.clear();
-        self.status = "Logged out".to_string();
+        self.status = self.t("status.logged_out");
     }
 
     fn open_chat(&mut self) {
@@ -276,16 +298,16 @@ impl MessengerApp {
             return;
         }
         let Some(_auth) = self.auth.clone() else {
-            self.status = "Log in first".to_string();
+            self.status = self.t("error.log_in_first");
             return;
         };
         if self.peer_nickname_input.trim().is_empty() {
-            self.status = "Enter peer nickname".to_string();
+            self.status = self.t("status.enter_peer_nickname");
             return;
         }
         let peer = self.peer_nickname_input.trim().to_string();
         let Some(local_keys) = self.local_keys.clone() else {
-            self.status = "Log in first".to_string();
+            self.status = self.t("error.log_in_first");
             return;
         };
         let (tx, rx) = mpsc::channel();
@@ -309,14 +331,14 @@ impl MessengerApp {
             },
             Err(mpsc::TryRecvError::Empty) => self.open_chat_rx = Some(rx),
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.status = "Open chat worker stopped".to_string();
+                self.status = self.t("status.open_chat_worker_stopped");
             }
         }
     }
 
     fn apply_open_chat_success(&mut self, success: OpenChatSuccess) {
         if success.bundle.device_uuid != success.resolved_uuid {
-            self.status = "Peer resolve mismatch, retry".to_string();
+            self.status = self.t("status.peer_resolve_mismatch");
             return;
         }
         if !self.verify_or_pin_peer_identity(&success.peer, &success.bundle) {
@@ -345,7 +367,7 @@ impl MessengerApp {
             return;
         }
         if self.auth.is_none() {
-            self.status = "Log in first".to_string();
+            self.status = self.t("error.log_in_first");
             self.peer_search_results.clear();
             return;
         }
@@ -353,7 +375,7 @@ impl MessengerApp {
         let core = self.core.clone();
         let (tx, rx) = mpsc::channel();
         self.search_rx = Some(rx);
-        self.status = "Searching users...".to_string();
+        self.status = self.t("status.searching_users");
         thread::spawn(move || {
             let rt = runtime();
             let result = rt
@@ -372,16 +394,19 @@ impl MessengerApp {
                 Ok(users) => {
                     self.peer_search_results = users;
                     if self.peer_search_results.is_empty() {
-                        self.status = "No users found".to_string();
+                        self.status = self.t("status.no_users_found");
                     } else {
-                        self.status = format!("Found {} users", self.peer_search_results.len());
+                        self.status = self.tf(
+                            "status.found_users",
+                            &[("count", &self.peer_search_results.len().to_string())],
+                        );
                     }
                 }
                 Err(err) => self.status = err,
             },
             Err(mpsc::TryRecvError::Empty) => self.search_rx = Some(rx),
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.status = "Search worker stopped".to_string();
+                self.status = self.t("status.search_worker_stopped");
             }
         }
     }
@@ -391,11 +416,11 @@ impl MessengerApp {
             return;
         }
         let Some(auth) = self.auth.clone() else {
-            self.status = "Log in first".to_string();
+            self.status = self.t("error.log_in_first");
             return;
         };
         if self.selected_chat.is_empty() {
-            self.status = "Select chat first".to_string();
+            self.status = self.t("status.select_chat_first");
             return;
         }
         let Some(peer_device_uuid) = self.selected_chat_session() else {
@@ -450,11 +475,11 @@ impl MessengerApp {
             return;
         }
         let Some(auth) = self.auth.clone() else {
-            self.status = "Log in first".to_string();
+            self.status = self.t("error.log_in_first");
             return;
         };
         if self.selected_chat.is_empty() {
-            self.status = "Select chat first".to_string();
+            self.status = self.t("status.select_chat_first");
             return;
         }
         let Some(peer_device_uuid) = self.selected_chat_session() else {
@@ -468,7 +493,7 @@ impl MessengerApp {
             return;
         };
         if metadata.len() > MAX_FILE_BYTES as u64 {
-            self.status = "File is too large. Limit is 100 MB".to_string();
+            self.status = self.t("status.file_too_large");
             return;
         }
         let file_name = path
@@ -540,7 +565,7 @@ impl MessengerApp {
         if let Some(data_b64) = message.file_data_b64 {
             let (tx, rx) = mpsc::channel();
             self.save_file_rx = Some(rx);
-            self.status = format!("Saving {file_name}...");
+            self.status = self.tf("status.saving_file", &[("file_name", &file_name)]);
             thread::spawn(move || {
                 let result =
                     base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_b64)
@@ -554,13 +579,13 @@ impl MessengerApp {
             return;
         }
         let (Some(blob_id), Some(file_key_b64)) = (message.blob_id, message.file_key_b64) else {
-            self.status = "File data is unavailable".to_string();
+            self.status = self.t("status.file_data_unavailable");
             return;
         };
         let core = self.core.clone();
         let (tx, rx) = mpsc::channel();
         self.save_file_rx = Some(rx);
-        self.status = format!("Saving {file_name}...");
+        self.status = self.tf("status.saving_file", &[("file_name", &file_name)]);
         thread::spawn(move || {
             let result = run_save_file_flow(core, auth, blob_id, file_key_b64, path)
                 .map_err(|err| format!("Could not save file: {err}"));
@@ -581,7 +606,7 @@ impl MessengerApp {
                             sent.message_index,
                             MessageStatus::Sent,
                         );
-                        self.status = "Sent".to_string();
+                        self.status = self.t("status.sent");
                     }
                     Err(err) => {
                         self.update_message_status(
@@ -596,7 +621,7 @@ impl MessengerApp {
             }
             Err(mpsc::TryRecvError::Empty) => self.send_rx = Some(rx),
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.status = "Send worker stopped".to_string();
+                self.status = self.t("status.send_worker_stopped");
             }
         }
     }
@@ -630,7 +655,7 @@ impl MessengerApp {
 
     fn selected_chat_session(&mut self) -> Option<String> {
         if self.selected_chat.is_empty() {
-            self.status = "Select chat first".to_string();
+            self.status = self.t("status.select_chat_first");
             return None;
         }
 
@@ -644,7 +669,7 @@ impl MessengerApp {
                 return Some(known_uuid);
             }
         }
-        self.status = "Re-open chat before sending".to_string();
+        self.status = self.t("status.reopen_chat_before_sending");
         None
     }
 
@@ -872,7 +897,7 @@ impl MessengerApp {
             return;
         };
         let Some(local_keys) = self.local_keys.clone() else {
-            self.status = "Log in first".to_string();
+            self.status = self.t("error.log_in_first");
             return;
         };
         let core = self.core.clone();
@@ -1003,13 +1028,13 @@ impl eframe::App for MessengerApp {
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("rsmsg");
+                ui.heading(self.t("app.title"));
                 ui.separator();
                 ui.label(&self.status);
                 if let Some(peer) = &self.key_change_peer {
                     ui.separator();
-                    ui.label(format!("@{peer} key changed"));
-                    if ui.button("Trust new key").clicked() {
+                    ui.label(self.tf("security.key_changed", &[("peer", peer)]));
+                    if ui.button(self.t("security.trust_new_key")).clicked() {
                         self.trust_new_peer_identity();
                     }
                 }
@@ -1017,60 +1042,66 @@ impl eframe::App for MessengerApp {
         });
 
         egui::SidePanel::left("left").show(ctx, |ui| {
-            ui.heading("Account");
+            ui.heading(self.t("account.title"));
             if self.auth.is_some() {
                 ui.label(format!("@{}", self.nickname));
-                if ui.button("Settings").clicked() {
+                if ui.button(self.t("settings.open")).clicked() {
                     self.settings_open = true;
                 }
-                if ui.button("Logout").clicked() {
+                if ui.button(self.t("auth.logout")).clicked() {
                     self.logout();
                 }
                 ui.separator();
-                ui.collapsing("Security", |ui| {
+                ui.collapsing(self.t("security.title"), |ui| {
                     if let Some(local) = self.local_safety_number() {
-                        ui.label("Your device fingerprint");
+                        ui.label(self.t("security.your_fingerprint"));
                         ui.monospace(local);
                     }
                     if !self.selected_chat.is_empty() {
                         ui.separator();
-                        ui.label(format!("@{} fingerprint", self.selected_chat));
+                        ui.label(self.tf(
+                            "security.peer_fingerprint",
+                            &[("peer", &self.selected_chat)],
+                        ));
                         if let Some(peer) = self.peer_safety_number(&self.selected_chat) {
                             ui.monospace(peer);
                         } else {
-                            ui.label("Open chat to pin identity key");
+                            ui.label(self.t("security.open_chat_to_pin"));
                         }
                     }
                 });
             } else {
-                ui.label("Server");
+                ui.label(self.t("connection.server"));
                 ui.text_edit_singleline(&mut self.server_input);
-                ui.label("Nickname");
+                ui.label(self.t("auth.nickname"));
                 ui.text_edit_singleline(&mut self.nickname);
-                ui.label("Password");
+                ui.label(self.t("auth.password"));
                 ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
                 let login_busy = self.login_rx.is_some();
                 if ui
-                    .add_enabled(!login_busy, egui::Button::new("Login"))
+                    .add_enabled(!login_busy, egui::Button::new(self.t("auth.login")))
                     .clicked()
                 {
                     self.register_or_login(false);
                 }
                 if ui
-                    .add_enabled(!login_busy, egui::Button::new("Create account"))
+                    .add_enabled(
+                        !login_busy,
+                        egui::Button::new(self.t("auth.create_account")),
+                    )
                     .clicked()
                 {
                     self.register_nickname = self.nickname.clone();
                     self.create_account_open = true;
                 }
-                if ui.button("Settings").clicked() {
+                if ui.button(self.t("settings.open")).clicked() {
                     self.settings_open = true;
                 }
             }
 
             ui.separator();
-            ui.heading("New chat");
-            ui.label("Peer nickname");
+            ui.heading(self.t("new_chat.title"));
+            ui.label(self.t("chat.peer_nickname"));
             let logged_in = self.auth.is_some();
             ui.add_sized(
                 [160.0, 22.0],
@@ -1078,7 +1109,10 @@ impl eframe::App for MessengerApp {
             );
             let search_busy = self.search_rx.is_some();
             if ui
-                .add_enabled(logged_in && !search_busy, egui::Button::new("Search users"))
+                .add_enabled(
+                    logged_in && !search_busy,
+                    egui::Button::new(self.t("chat.search_users")),
+                )
                 .clicked()
             {
                 self.search_users();
@@ -1089,14 +1123,14 @@ impl eframe::App for MessengerApp {
                 }
             }
             if ui
-                .add_enabled(logged_in, egui::Button::new("Open chat"))
+                .add_enabled(logged_in, egui::Button::new(self.t("chat.open")))
                 .clicked()
             {
                 self.open_chat();
             }
 
             ui.separator();
-            ui.heading("Chats");
+            ui.heading(self.t("chats.title"));
             let chat_names: Vec<String> = self.history.chats.keys().cloned().collect();
             for nick in chat_names {
                 let selected = self.selected_chat == nick;
@@ -1119,7 +1153,7 @@ impl eframe::App for MessengerApp {
                     }
                 }
             }
-            if ui.button("Sync incoming").clicked() {
+            if ui.button(self.t("chat.sync_incoming")).clicked() {
                 self.sync_incoming();
             }
         });
@@ -1128,10 +1162,10 @@ impl eframe::App for MessengerApp {
             if self.auth.is_none() {
                 ui.centered_and_justified(|ui| {
                     ui.vertical_centered(|ui| {
-                        ui.heading("Welcome to rsmsg");
-                        ui.label("1) Enter your nickname");
-                        ui.label("2) Press Login or create account with invite code");
-                        ui.label("3) Open chat by peer nickname");
+                        ui.heading(self.t("welcome.title"));
+                        ui.label(self.t("welcome.step_1"));
+                        ui.label(self.t("welcome.step_2"));
+                        ui.label(self.t("welcome.step_3"));
                     });
                 });
                 return;
@@ -1139,12 +1173,12 @@ impl eframe::App for MessengerApp {
 
             if self.selected_chat.is_empty() {
                 ui.centered_and_justified(|ui| {
-                    ui.heading("Select or start chat");
+                    ui.heading(self.t("placeholder.select_or_start"));
                 });
                 return;
             }
 
-            ui.heading(format!("Chat with @{}", self.selected_chat));
+            ui.heading(self.tf("chat.title", &[("peer", &self.selected_chat)]));
             ui.separator();
 
             let composer_height = 96.0;
@@ -1154,9 +1188,17 @@ impl eframe::App for MessengerApp {
                 .max_height(history_height)
                 .show(ui, |ui| {
                     let mut save_index = None;
+                    let save_label = self.t("common.save");
+                    let you_label = self.t("message.you");
                     if let Some(messages) = self.history.chats.get(&self.selected_chat) {
                         for (index, m) in messages.iter().enumerate() {
-                            if render_message_bubble(ui, m, &self.selected_chat) {
+                            if render_message_bubble(
+                                ui,
+                                m,
+                                &self.selected_chat,
+                                &save_label,
+                                &you_label,
+                            ) {
                                 save_index = Some(index);
                             }
                         }
@@ -1167,9 +1209,10 @@ impl eframe::App for MessengerApp {
                 });
 
             ui.separator();
+            let message_hint = self.t("chat.message_hint");
             let response = ui.add_sized(
                 [ui.available_width(), 56.0],
-                egui::TextEdit::multiline(&mut self.message_input).hint_text("Message"),
+                egui::TextEdit::multiline(&mut self.message_input).hint_text(message_hint),
             );
             let send_by_enter = response.has_focus()
                 && ui.input(|input| {
@@ -1186,13 +1229,19 @@ impl eframe::App for MessengerApp {
             }
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(self.send_rx.is_none(), egui::Button::new("Send"))
+                    .add_enabled(
+                        self.send_rx.is_none(),
+                        egui::Button::new(self.t("chat.send")),
+                    )
                     .clicked()
                 {
                     self.send_current_message();
                 }
                 if ui
-                    .add_enabled(self.send_rx.is_none(), egui::Button::new("Attach file"))
+                    .add_enabled(
+                        self.send_rx.is_none(),
+                        egui::Button::new(self.t("chat.attach_file")),
+                    )
                     .clicked()
                 {
                     self.send_file();
@@ -1220,22 +1269,25 @@ impl MessengerApp {
 
     fn render_settings_window(&mut self, ctx: &egui::Context) {
         let mut open = self.settings_open;
-        egui::Window::new("Settings")
+        egui::Window::new(self.t("settings.title"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .default_width(360.0)
             .show(ctx, |ui| {
-                ui.heading("Appearance");
+                ui.heading(self.t("settings.appearance"));
+                let theme_system = self.t("settings.theme_system");
+                let theme_light = self.t("settings.theme_light");
+                let theme_dark = self.t("settings.theme_dark");
                 let mut changed = false;
                 changed |= ui
-                    .radio_value(&mut self.settings.theme, AppTheme::System, "System")
+                    .radio_value(&mut self.settings.theme, AppTheme::System, theme_system)
                     .changed();
                 changed |= ui
-                    .radio_value(&mut self.settings.theme, AppTheme::Light, "Light")
+                    .radio_value(&mut self.settings.theme, AppTheme::Light, theme_light)
                     .changed();
                 changed |= ui
-                    .radio_value(&mut self.settings.theme, AppTheme::Dark, "Dark")
+                    .radio_value(&mut self.settings.theme, AppTheme::Dark, theme_dark)
                     .changed();
                 if changed {
                     self.apply_theme(ctx);
@@ -1243,8 +1295,40 @@ impl MessengerApp {
                 }
 
                 ui.separator();
-                ui.heading("Profile");
-                ui.label("Default username");
+                ui.heading(self.t("settings.language"));
+                let language_system = self.t("settings.language_system");
+                let language_en = self.t("settings.language_en");
+                let language_ru = self.t("settings.language_ru");
+                let mut language_changed = false;
+                language_changed |= ui
+                    .radio_value(
+                        &mut self.settings.language,
+                        AppLanguage::System,
+                        language_system,
+                    )
+                    .changed();
+                language_changed |= ui
+                    .radio_value(
+                        &mut self.settings.language,
+                        AppLanguage::English,
+                        language_en,
+                    )
+                    .changed();
+                language_changed |= ui
+                    .radio_value(
+                        &mut self.settings.language,
+                        AppLanguage::Russian,
+                        language_ru,
+                    )
+                    .changed();
+                if language_changed {
+                    self.localization = Localization::load(self.settings.language.code());
+                    self.settings.save();
+                }
+
+                ui.separator();
+                ui.heading(self.t("profile.title"));
+                ui.label(self.t("profile.default_username"));
                 let username_changed = ui
                     .text_edit_singleline(&mut self.settings.default_username)
                     .changed();
@@ -1256,29 +1340,29 @@ impl MessengerApp {
                     }
                     self.settings.save();
                 }
-                if ui.button("Use current username").clicked() {
+                if ui.button(self.t("profile.use_current_username")).clicked() {
                     self.settings.default_username = self.nickname.trim().to_string();
                     self.settings.save();
                 }
 
                 ui.separator();
-                ui.heading("Connection");
-                ui.label("Server");
+                ui.heading(self.t("connection.title"));
+                ui.label(self.t("connection.server"));
                 ui.text_edit_singleline(&mut self.server_input);
                 if self.auth.is_some() {
-                    if ui.button("Apply after logout").clicked() {
+                    if ui.button(self.t("connection.apply_after_logout")).clicked() {
                         self.logout();
                         self.apply_server_config();
                     }
                 }
 
                 ui.separator();
-                ui.heading("About");
-                ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-                ui.label("Creator KevinDev64 <kevindev56@yandex.ru>");
+                ui.heading(self.t("about.title"));
+                ui.label(self.tf("about.version", &[("version", env!("CARGO_PKG_VERSION"))]));
+                ui.label(self.t("about.creator"));
 
                 ui.separator();
-                if ui.button("Close").clicked() {
+                if ui.button(self.t("common.close")).clicked() {
                     self.settings_open = false;
                 }
             });
@@ -1287,29 +1371,29 @@ impl MessengerApp {
 
     fn render_create_account_window(&mut self, ctx: &egui::Context) {
         let mut open = self.create_account_open;
-        egui::Window::new("Create account")
+        egui::Window::new(self.t("auth.create_account"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .default_width(380.0)
             .show(ctx, |ui| {
-                ui.label("Registration requires a one-time invite code.");
+                ui.label(self.t("auth.invite_required"));
                 ui.separator();
-                ui.label("Nickname");
+                ui.label(self.t("auth.nickname"));
                 ui.text_edit_singleline(&mut self.register_nickname);
-                ui.label("Password");
+                ui.label(self.t("auth.password"));
                 ui.add(egui::TextEdit::singleline(&mut self.register_password).password(true));
-                ui.label("Invite code");
+                ui.label(self.t("auth.invite_code"));
                 ui.text_edit_singleline(&mut self.register_invite_code);
                 ui.separator();
                 let busy = self.login_rx.is_some();
                 if ui
-                    .add_enabled(!busy, egui::Button::new("Create account"))
+                    .add_enabled(!busy, egui::Button::new(self.t("auth.create_account")))
                     .clicked()
                 {
                     self.create_account();
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(self.t("common.cancel")).clicked() {
                     self.create_account_open = false;
                 }
             });

@@ -2,7 +2,13 @@ use eframe::egui;
 
 use crate::history::{ChatMessage, MessageStatus};
 
-pub fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &str) -> bool {
+pub fn render_message_bubble(
+    ui: &mut egui::Ui,
+    message: &ChatMessage,
+    peer: &str,
+    save_label: &str,
+    you_label: &str,
+) -> bool {
     let mut save_clicked = false;
     let bubble_color = if message.outgoing {
         egui::Color32::from_rgb(56, 120, 255)
@@ -12,7 +18,8 @@ pub fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &st
     let text_color = egui::Color32::WHITE;
     let meta = if message.outgoing {
         format!(
-            "You · {} · {}",
+            "{} · {} · {}",
+            you_label,
             format_message_time(message.ts),
             message_status_label(message.status)
         )
@@ -41,6 +48,7 @@ pub fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &st
                     &display_text,
                     text_color,
                     bubble_width,
+                    save_label,
                 )
             });
         });
@@ -54,6 +62,7 @@ pub fn render_message_bubble(ui: &mut egui::Ui, message: &ChatMessage, peer: &st
                     &display_text,
                     text_color,
                     bubble_width,
+                    save_label,
                 )
             });
         });
@@ -69,6 +78,7 @@ fn render_bubble_content(
     text: &str,
     text_color: egui::Color32,
     width: f32,
+    save_label: &str,
 ) -> bool {
     ui.set_width(width);
     ui.add(egui::Label::new(egui::RichText::new(meta).small().color(text_color)).wrap());
@@ -81,7 +91,7 @@ fn render_bubble_content(
                 .color(text_color),
         );
         ui.add_space(8.0);
-        if ui.button("Save").clicked() {
+        if ui.button(save_label).clicked() {
             save_clicked = true;
         }
     }

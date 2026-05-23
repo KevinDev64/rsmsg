@@ -1,5 +1,6 @@
 mod app;
 mod history;
+mod localization;
 mod message_ui;
 mod settings;
 

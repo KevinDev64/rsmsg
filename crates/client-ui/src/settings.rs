@@ -9,6 +9,29 @@ pub enum AppTheme {
     Dark,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AppLanguage {
+    System,
+    English,
+    Russian,
+}
+
+impl AppLanguage {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::System => system_language_code(),
+            Self::English => "en",
+            Self::Russian => "ru",
+        }
+    }
+}
+
+impl Default for AppLanguage {
+    fn default() -> Self {
+        Self::System
+    }
+}
+
 impl Default for AppTheme {
     fn default() -> Self {
         Self::System
@@ -19,6 +42,8 @@ impl Default for AppTheme {
 pub struct AppSettings {
     #[serde(default)]
     pub theme: AppTheme,
+    #[serde(default)]
+    pub language: AppLanguage,
     #[serde(default)]
     pub default_username: String,
 }
@@ -46,4 +71,16 @@ impl AppSettings {
 fn settings_file() -> String {
     let profile = std::env::var("RSMSG_PROFILE").unwrap_or_else(|_| "default".to_string());
     format!(".rsmsg_settings.{profile}.json")
+}
+
+fn system_language_code() -> &'static str {
+    let language = std::env::var("LANG")
+        .or_else(|_| std::env::var("LC_ALL"))
+        .unwrap_or_default()
+        .to_lowercase();
+    if language.starts_with("ru") {
+        "ru"
+    } else {
+        "en"
+    }
 }
