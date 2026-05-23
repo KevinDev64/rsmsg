@@ -173,6 +173,7 @@ pub struct DeviceLogoutResponse {
 pub struct UserRegisterRequest {
     pub user_id: String,
     pub password: String,
+    pub invite_code: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

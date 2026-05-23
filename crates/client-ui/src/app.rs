@@ -35,6 +35,10 @@ pub struct MessengerApp {
     status: String,
     settings: AppSettings,
     settings_open: bool,
+    create_account_open: bool,
+    register_nickname: String,
+    register_password: String,
+    register_invite_code: String,
     peer_nickname_input: String,
     peer_search_results: Vec<String>,
     selected_chat: String,
@@ -60,6 +64,8 @@ struct LoginSuccess {
     local_keys: LocalDeviceKeys,
     history: ChatHistory,
     auth: DeviceAuth,
+    nickname: String,
+    password: String,
     server_input: String,
     status: String,
 }
@@ -139,6 +145,10 @@ impl MessengerApp {
             status: "Not logged in".to_string(),
             settings,
             settings_open: false,
+            create_account_open: false,
+            register_nickname: String::new(),
+            register_password: String::new(),
+            register_invite_code: String::new(),
             peer_nickname_input: String::new(),
             peer_search_results: Vec::new(),
             selected_chat: String::new(),
@@ -175,7 +185,32 @@ impl MessengerApp {
         let password = self.password.clone();
         let server_input = self.server_input.clone();
         thread::spawn(move || {
-            let result = run_login_flow(create, nickname, password, server_input);
+            let result = run_login_flow(create, nickname, password, server_input, None);
+            let _ = tx.send(LoginResult { result });
+        });
+    }
+
+    fn create_account(&mut self) {
+        if self.login_rx.is_some() {
+            return;
+        }
+        if self.register_nickname.trim().is_empty() || self.register_password.len() < 6 {
+            self.status = "Enter nickname and password (>=6)".to_string();
+            return;
+        }
+        if self.register_invite_code.trim().is_empty() {
+            self.status = "Enter invite code".to_string();
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.login_rx = Some(rx);
+        self.status = "Creating account...".to_string();
+        let nickname = self.register_nickname.trim().to_string();
+        let password = self.register_password.clone();
+        let invite_code = self.register_invite_code.trim().to_string();
+        let server_input = self.server_input.clone();
+        thread::spawn(move || {
+            let result = run_login_flow(true, nickname, password, server_input, Some(invite_code));
             let _ = tx.send(LoginResult { result });
         });
     }
@@ -191,8 +226,13 @@ impl MessengerApp {
                     self.local_keys = Some(success.local_keys);
                     self.history = success.history;
                     self.auth = Some(success.auth);
+                    self.nickname = success.nickname;
+                    self.password = success.password;
                     self.server_input = success.server_input;
                     self.status = success.status;
+                    self.create_account_open = false;
+                    self.register_password.clear();
+                    self.register_invite_code.clear();
                     if self.settings.default_username.trim().is_empty() {
                         self.settings.default_username = self.nickname.clone();
                         self.settings.save();
@@ -1011,16 +1051,17 @@ impl eframe::App for MessengerApp {
                 ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
                 let login_busy = self.login_rx.is_some();
                 if ui
-                    .add_enabled(!login_busy, egui::Button::new("Register"))
-                    .clicked()
-                {
-                    self.register_or_login(true);
-                }
-                if ui
                     .add_enabled(!login_busy, egui::Button::new("Login"))
                     .clicked()
                 {
                     self.register_or_login(false);
+                }
+                if ui
+                    .add_enabled(!login_busy, egui::Button::new("Create account"))
+                    .clicked()
+                {
+                    self.register_nickname = self.nickname.clone();
+                    self.create_account_open = true;
                 }
                 if ui.button("Settings").clicked() {
                     self.settings_open = true;
@@ -1089,7 +1130,7 @@ impl eframe::App for MessengerApp {
                     ui.vertical_centered(|ui| {
                         ui.heading("Welcome to rsmsg");
                         ui.label("1) Enter your nickname");
-                        ui.label("2) Press Register / Login");
+                        ui.label("2) Press Login or create account with invite code");
                         ui.label("3) Open chat by peer nickname");
                     });
                 });
@@ -1161,6 +1202,9 @@ impl eframe::App for MessengerApp {
 
         if self.settings_open {
             self.render_settings_window(ctx);
+        }
+        if self.create_account_open {
+            self.render_create_account_window(ctx);
         }
     }
 }
@@ -1241,6 +1285,37 @@ impl MessengerApp {
         self.settings_open = open && self.settings_open;
     }
 
+    fn render_create_account_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.create_account_open;
+        egui::Window::new("Create account")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(380.0)
+            .show(ctx, |ui| {
+                ui.label("Registration requires a one-time invite code.");
+                ui.separator();
+                ui.label("Nickname");
+                ui.text_edit_singleline(&mut self.register_nickname);
+                ui.label("Password");
+                ui.add(egui::TextEdit::singleline(&mut self.register_password).password(true));
+                ui.label("Invite code");
+                ui.text_edit_singleline(&mut self.register_invite_code);
+                ui.separator();
+                let busy = self.login_rx.is_some();
+                if ui
+                    .add_enabled(!busy, egui::Button::new("Create account"))
+                    .clicked()
+                {
+                    self.create_account();
+                }
+                if ui.button("Cancel").clicked() {
+                    self.create_account_open = false;
+                }
+            });
+        self.create_account_open = open && self.create_account_open;
+    }
+
     fn local_safety_number(&self) -> Option<String> {
         let keys = self.local_keys.as_ref()?;
         Some(format_safety_number(&[
@@ -1287,6 +1362,7 @@ fn run_login_flow(
     nickname: String,
     password: String,
     server_input: String,
+    invite_code: Option<String>,
 ) -> Result<LoginSuccess, String> {
     let config = ClientConfig::for_server(&server_input);
     let normalized_server = config.http_base.clone();
@@ -1294,9 +1370,10 @@ fn run_login_flow(
     let rt = runtime();
 
     if create {
-        match rt.block_on(core.register_user(nickname.clone(), password.clone())) {
+        let invite_code = invite_code.ok_or("Invite code is required".to_string())?;
+        match rt.block_on(core.register_user(nickname.clone(), password.clone(), invite_code)) {
             Ok(true) => {}
-            Ok(false) => {}
+            Ok(false) => return Err("Account already exists".to_string()),
             Err(err) => return Err(format!("Account create failed: {err}")),
         }
     }
@@ -1325,6 +1402,8 @@ fn run_login_flow(
         local_keys,
         history,
         auth,
+        nickname: nickname.clone(),
+        password,
         server_input: normalized_server,
         status: format!("Logged in as {nickname}"),
     })

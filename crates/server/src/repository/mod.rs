@@ -3,5 +3,6 @@ pub mod blobs;
 pub mod devices;
 pub mod messages;
 pub mod prekeys;
+pub mod registration_invites;
 pub mod stats;
 pub mod users;

@@ -128,10 +128,19 @@ impl ClientCore {
         Ok(response.device_uuid)
     }
 
-    pub async fn register_user(&self, user_id: String, password: String) -> Result<bool> {
+    pub async fn register_user(
+        &self,
+        user_id: String,
+        password: String,
+        invite_code: String,
+    ) -> Result<bool> {
         let response = self
             .transport
-            .user_register(UserRegisterRequest { user_id, password })
+            .user_register(UserRegisterRequest {
+                user_id,
+                password,
+                invite_code,
+            })
             .await?;
         Ok(response.created)
     }

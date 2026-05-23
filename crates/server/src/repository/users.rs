@@ -13,6 +13,22 @@ pub async fn create_user(
     Ok(result.rows_affected() == 1)
 }
 
+pub async fn create_user_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: String,
+    password_hash: String,
+) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        "INSERT INTO users (user_id, password_hash) VALUES ($1, $2) \
+         ON CONFLICT (user_id) DO NOTHING \
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(password_hash)
+    .fetch_optional(&mut **tx)
+    .await
+}
+
 pub async fn get_password_hash(
     db: &sqlx::PgPool,
     user_id: String,

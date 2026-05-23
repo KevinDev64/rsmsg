@@ -48,7 +48,18 @@ cargo check --workspace
 cargo test -p server
 ```
 
-## 5) Запустить сервер
+## 5) Сгенерировать invite-коды
+
+Регистрация закрыта для всех пользователей без одноразового invite-кода.
+Код живёт 2 дня и сгорает после успешной регистрации.
+
+```bash
+cargo run -p server --bin generate_invite
+```
+
+Формат кода: `RSMSG:<uuid>:<secret>`.
+
+## 6) Запустить сервер
 
 ```bash
 cargo run -p server
@@ -56,7 +67,7 @@ cargo run -p server
 
 По умолчанию сервер слушает `127.0.0.1:3000`.
 
-## 6) Запустить клиент (egui)
+## 7) Запустить клиент (egui)
 
 В новом терминале из корня проекта:
 
@@ -72,7 +83,7 @@ RSMSG_PROFILE=alice cargo run -p client-ui
 RSMSG_PROFILE=bob cargo run -p client-ui
 ```
 
-## 7) Сценарий ручного теста (2 пользователя)
+## 8) Сценарий ручного теста (2 пользователя)
 
 Откройте **два** окна клиента (`client-ui`).
 
@@ -81,16 +92,18 @@ RSMSG_PROFILE=bob cargo run -p client-ui
 1. Введите:
    - `Nickname`: `alice`
    - `Password`: любой пароль длиной 6+ символов
-2. Нажмите `Register`.
-3. Нажмите `Login`.
+2. Нажмите `Create account`.
+3. Введите nickname, password и invite code.
+4. Нажмите `Create account`.
 
 ### Окно B
 
 1. Введите:
    - `Nickname`: `bob`
    - `Password`: любой пароль длиной 6+ символов
-2. Нажмите `Register`.
-3. Нажмите `Login`.
+2. Нажмите `Create account`.
+3. Введите nickname, password и invite code.
+4. Нажмите `Create account`.
 
 ### Создание чатов
 
@@ -105,7 +118,7 @@ RSMSG_PROFILE=bob cargo run -p client-ui
 2. Входящие подтягиваются автоматически (периодический sync).
 3. История чатов отображается в центре и сохраняется локально.
 
-## 8) Полезные API endpoint'ы (server)
+## 9) Полезные API endpoint'ы (server)
 
 - `POST /v1/user_register`
 - `POST /v1/user_login`
@@ -119,7 +132,7 @@ RSMSG_PROFILE=bob cargo run -p client-ui
 - `POST /v1/ack_message`
 - `GET /v1/ws`
 
-## 9) Локальные файлы состояния клиента
+## 10) Локальные файлы состояния клиента
 
 Файлы создаются в корне проекта автоматически:
 
@@ -129,7 +142,7 @@ RSMSG_PROFILE=bob cargo run -p client-ui
 
 Они добавлены в `.gitignore`.
 
-## 10) Остановка
+## 11) Остановка
 
 Остановить сервер: `Ctrl+C` в терминале сервера.
 

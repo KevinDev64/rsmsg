@@ -12,8 +12,15 @@ use uuid::Uuid;
 
 use crate::{
     api_error::{ApiError, ApiResult},
-    repository::{devices, users},
+    repository::{devices, registration_invites, users},
 };
+
+const INVITE_CODE_PREFIX: &str = "RSMSG:";
+
+struct ParsedInviteCode {
+    id: Uuid,
+    secret: String,
+}
 
 fn hash_password(password: &str) -> ApiResult<String> {
     let salt = SaltString::generate(&mut OsRng);
@@ -32,6 +39,33 @@ fn verify_password(password: &str, hash: &str) -> bool {
         .is_ok()
 }
 
+fn parse_invite_code(code: &str) -> ApiResult<ParsedInviteCode> {
+    let Some(rest) = code.trim().strip_prefix(INVITE_CODE_PREFIX) else {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid invite code",
+        ));
+    };
+    let Some((id, secret)) = rest.split_once(':') else {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid invite code",
+        ));
+    };
+    if secret.trim().is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid invite code",
+        ));
+    }
+    let id = Uuid::parse_str(id)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid invite code"))?;
+    Ok(ParsedInviteCode {
+        id,
+        secret: secret.to_string(),
+    })
+}
+
 pub async fn register(
     db: &sqlx::PgPool,
     payload: UserRegisterRequest,
@@ -42,11 +76,45 @@ pub async fn register(
             "invalid credentials",
         ));
     }
+    let invite = parse_invite_code(&payload.invite_code)?;
     let password_hash = hash_password(&payload.password)?;
-    let created = users::create_user(db, payload.user_id, password_hash)
+
+    let mut tx = db
+        .begin()
+        .await
+        .map_err(|err| ApiError::database("user_register transaction begin failed", err))?;
+    let stored_invite = registration_invites::find_invite(&mut tx, invite.id)
+        .await
+        .map_err(|err| ApiError::database("user_register invite lookup failed", err))?
+        .ok_or(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid invite code",
+        ))?;
+    if stored_invite.used_at_exists || stored_invite.expired {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid invite code",
+        ));
+    }
+    if !verify_password(&invite.secret, &stored_invite.secret_hash) {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid invite code",
+        ));
+    }
+    let user_db_id = users::create_user_tx(&mut tx, payload.user_id, password_hash)
         .await
         .map_err(|err| ApiError::database("user_register create failed", err))?;
-    Ok(UserRegisterResponse { created })
+    let Some(user_db_id) = user_db_id else {
+        return Ok(UserRegisterResponse { created: false });
+    };
+    registration_invites::mark_used(&mut tx, invite.id, user_db_id)
+        .await
+        .map_err(|err| ApiError::database("user_register invite consume failed", err))?;
+    tx.commit()
+        .await
+        .map_err(|err| ApiError::database("user_register transaction commit failed", err))?;
+    Ok(UserRegisterResponse { created: true })
 }
 
 pub async fn login(db: &sqlx::PgPool, payload: UserLoginRequest) -> ApiResult<UserLoginResponse> {
