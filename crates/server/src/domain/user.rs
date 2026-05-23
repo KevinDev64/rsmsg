@@ -90,7 +90,13 @@ pub async fn register(
             StatusCode::UNAUTHORIZED,
             "invalid invite code",
         ))?;
-    if stored_invite.used_at_exists || stored_invite.expired {
+    if stored_invite.used_at_exists {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "invite code already used",
+        ));
+    }
+    if stored_invite.expired {
         return Err(ApiError::new(
             StatusCode::UNAUTHORIZED,
             "invalid invite code",

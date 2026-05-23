@@ -47,7 +47,13 @@ impl ApiTransport {
         let url = format!("{}/v1/user_register", self.cfg.http_base);
         let response = self.client.post(url).json(&req).send().await?;
         if !response.status().is_success() {
-            return Err(anyhow!("user_register failed with {}", response.status()));
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let message = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|value| value.get("error")?.as_str().map(ToString::to_string))
+                .unwrap_or_else(|| format!("user_register failed with {status}"));
+            return Err(anyhow!(message));
         }
         Ok(response.json().await?)
     }
