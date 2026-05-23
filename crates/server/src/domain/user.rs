@@ -112,7 +112,10 @@ pub async fn register(
         .await
         .map_err(|err| ApiError::database("user_register create failed", err))?;
     let Some(user_db_id) = user_db_id else {
-        return Ok(UserRegisterResponse { created: false });
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "nickname already exists",
+        ));
     };
     registration_invites::mark_used(&mut tx, invite.id, user_db_id)
         .await
