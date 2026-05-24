@@ -19,7 +19,9 @@ use crate::{
     history::{ChatHistory, ChatMessage, MessageStatus, now_ms},
     localization::Localization,
     message_ui::render_message_bubble,
+    notifications,
     settings::{AppLanguage, AppSettings, AppTheme},
+    tray::{AppTray, TrayCommand},
 };
 
 const DEFAULT_DEVICE_ID: &str = "main";
@@ -34,6 +36,9 @@ pub struct MessengerApp {
     password: String,
     auth: Option<DeviceAuth>,
     status: String,
+    tray: Option<AppTray>,
+    hidden_to_tray: bool,
+    quit_requested: bool,
     settings: AppSettings,
     localization: Localization,
     settings_open: bool,
@@ -182,6 +187,38 @@ impl MessengerApp {
         }
     }
 
+    fn poll_tray(&mut self, ctx: &egui::Context) {
+        let Some(tray) = &self.tray else {
+            return;
+        };
+        let mut commands = Vec::new();
+        while let Some(command) = tray.try_recv() {
+            commands.push(command);
+        }
+        for command in commands {
+            match command {
+                TrayCommand::Show => self.show_from_tray(ctx),
+                TrayCommand::Quit => {
+                    self.quit_requested = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+    }
+
+    fn hide_to_tray(&mut self, ctx: &egui::Context) {
+        self.hidden_to_tray = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        self.status = self.t("status.hidden_to_tray");
+    }
+
+    fn show_from_tray(&mut self, ctx: &egui::Context) {
+        self.hidden_to_tray = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
     pub fn new() -> Self {
         let settings = AppSettings::load();
         let localization = Localization::load(settings.language.code());
@@ -189,6 +226,7 @@ impl MessengerApp {
         let server_input = config.http_base.clone();
         let core = ClientCore::new(config);
         let nickname = settings.default_username.clone();
+        let tray = AppTray::new();
         Self {
             core,
             local_keys: None,
@@ -198,6 +236,9 @@ impl MessengerApp {
             password: String::new(),
             auth: None,
             status: localization.text("status.not_logged_in"),
+            tray,
+            hidden_to_tray: false,
+            quit_requested: false,
             settings,
             localization,
             settings_open: false,
@@ -1146,6 +1187,9 @@ impl MessengerApp {
                     &msg.from_device_uuid[..8.min(msg.from_device_uuid.len())]
                 )
             });
+        let title = self.tf("notification.new_message", &[("user", &nick)]);
+        let body = text.clone();
+        notifications::notify(&title, &body);
         let chat = self.history.chats.entry(nick.clone()).or_default();
         chat.push(ChatMessage {
             outgoing: false,
@@ -1167,6 +1211,15 @@ impl MessengerApp {
 
 impl eframe::App for MessengerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_tray(ctx);
+        if self.tray.is_some()
+            && ctx.input(|input| input.viewport().close_requested())
+            && !self.quit_requested
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.hide_to_tray(ctx);
+            return;
+        }
         self.apply_theme(ctx);
         self.poll_login_result();
         self.poll_open_chat_result();
@@ -1187,6 +1240,12 @@ impl eframe::App for MessengerApp {
                 ui.heading(self.t("app.title"));
                 ui.separator();
                 ui.label(&self.status);
+                if self.tray.is_some() {
+                    ui.separator();
+                    if ui.button(self.t("tray.hide_to_tray")).clicked() {
+                        self.hide_to_tray(ctx);
+                    }
+                }
                 if let Some(peer) = &self.key_change_peer {
                     ui.separator();
                     ui.label(self.tf("security.key_changed", &[("peer", peer)]));
@@ -1431,6 +1490,9 @@ impl eframe::App for MessengerApp {
         }
         if self.delete_chat_confirm.is_some() {
             self.render_delete_chat_window(ctx);
+        }
+        if self.hidden_to_tray {
+            ctx.request_repaint_after(Duration::from_millis(500));
         }
     }
 }

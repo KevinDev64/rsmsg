@@ -2,7 +2,9 @@ mod app;
 mod history;
 mod localization;
 mod message_ui;
+mod notifications;
 mod settings;
+mod tray;
 
 use app::MessengerApp;
 
