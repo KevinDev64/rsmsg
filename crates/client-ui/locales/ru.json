@@ -30,6 +30,7 @@
   "call.microphone": "Микрофон",
   "call.mute_microphone": "Отключить микрофон",
   "call.outgoing_note": "Сигналинг звонка активен. Передача медиа будет подключена следующим шагом.",
+  "call.signaling_ready": "Сигналинг готов",
   "call.started": "Звонок с @{user} начат",
   "call.system_default": "Системное устройство",
   "call.unmute_microphone": "Включить микрофон",

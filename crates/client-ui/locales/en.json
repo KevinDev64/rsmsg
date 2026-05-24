@@ -30,6 +30,7 @@
   "call.microphone": "Microphone",
   "call.mute_microphone": "Mute microphone",
   "call.outgoing_note": "Call signaling is active. Media transport will be attached in the next call-media step.",
+  "call.signaling_ready": "Signaling ready",
   "call.started": "Call with @{user} started",
   "call.system_default": "System default",
   "call.unmute_microphone": "Unmute microphone",

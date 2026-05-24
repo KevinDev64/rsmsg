@@ -258,3 +258,38 @@ pub struct UserOnlineRequest {
 pub struct UserOnlineResponse {
     pub online: bool,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendCallSignalRequest {
+    pub call_id: String,
+    pub from_device_uuid: String,
+    pub to_device_uuid: String,
+    pub kind: String,
+    pub payload: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendCallSignalResponse {
+    pub accepted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchCallSignalsRequest {
+    pub device_uuid: String,
+    pub call_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallSignalItem {
+    pub call_id: String,
+    pub from_device_uuid: String,
+    pub kind: String,
+    pub payload: String,
+    pub created_at_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchCallSignalsResponse {
+    pub signals: Vec<CallSignalItem>,
+}

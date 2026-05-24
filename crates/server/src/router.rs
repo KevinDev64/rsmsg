@@ -7,7 +7,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::{
     app_state::AppState,
-    handlers::{blob, device, health, messaging, user, ws},
+    handlers::{blob, call_signaling, device, health, messaging, user, ws},
 };
 
 const MAX_REQUEST_BODY_BYTES: usize = 200 * 1024 * 1024;
@@ -37,6 +37,14 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/fetch_pending", post(messaging::fetch_pending))
         .route("/v1/ack_message", post(messaging::ack_message))
         .route("/v1/message_status", post(messaging::message_status))
+        .route(
+            "/v1/send_call_signal",
+            post(call_signaling::send_call_signal),
+        )
+        .route(
+            "/v1/fetch_call_signals",
+            post(call_signaling::fetch_call_signals),
+        )
         .route("/v1/upload_blob", post(blob::upload_blob))
         .route("/v1/fetch_blob", post(blob::fetch_blob))
         .route("/v1/upload_blob_bytes", post(blob::upload_blob_bytes))

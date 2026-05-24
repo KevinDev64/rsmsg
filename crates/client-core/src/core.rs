@@ -2,8 +2,9 @@ use anyhow::Result;
 use crypto::CryptoEngine;
 use serde::{Deserialize, Serialize};
 use shared::{
-    DeviceLoginRequest, FetchPrekeyBundleResponse, RegisterDeviceRequest, SendMessageRequest,
-    UploadPrekeysRequest, UserLoginRequest, UserRegisterRequest,
+    CallSignalItem, DeviceLoginRequest, FetchPrekeyBundleResponse, RegisterDeviceRequest,
+    SendCallSignalRequest, SendMessageRequest, UploadPrekeysRequest, UserLoginRequest,
+    UserRegisterRequest,
 };
 use std::{
     collections::HashMap,
@@ -431,6 +432,42 @@ impl ClientCore {
                 read: item.read,
             })
             .collect())
+    }
+
+    pub async fn send_call_signal(
+        &self,
+        auth: &DeviceAuth,
+        call_id: String,
+        to_device_uuid: String,
+        kind: String,
+        payload: String,
+    ) -> Result<bool> {
+        let response = self
+            .transport
+            .send_call_signal(
+                auth,
+                SendCallSignalRequest {
+                    call_id,
+                    from_device_uuid: auth.device_uuid.clone(),
+                    to_device_uuid,
+                    kind,
+                    payload,
+                },
+            )
+            .await?;
+        Ok(response.accepted)
+    }
+
+    pub async fn fetch_call_signals(
+        &self,
+        auth: &DeviceAuth,
+        call_id: Option<String>,
+    ) -> Result<Vec<CallSignalItem>> {
+        let response = self
+            .transport
+            .fetch_call_signals(auth, call_id, Some(100))
+            .await?;
+        Ok(response.signals)
     }
 
     pub async fn ws_drain_once(&self, auth: &DeviceAuth) -> Result<Vec<PendingEnvelope>> {

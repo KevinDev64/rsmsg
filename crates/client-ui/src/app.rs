@@ -12,7 +12,7 @@ use client_core::{
 };
 use eframe::egui;
 use sha2::{Digest, Sha256};
-use shared::FetchPrekeyBundleResponse;
+use shared::{CallSignalItem, FetchPrekeyBundleResponse};
 use uuid::Uuid;
 
 use crate::{
@@ -63,6 +63,7 @@ pub struct MessengerApp {
     save_file_rx: Option<Receiver<SaveFileResult>>,
     trust_rx: Option<Receiver<TrustResult>>,
     call_rx: Option<Receiver<CallResult>>,
+    call_signal_rx: Option<Receiver<CallSignalResult>>,
     active_call: Option<CallState>,
     last_sync_at: Instant,
 }
@@ -156,11 +157,18 @@ struct CallResult {
 
 struct CallState {
     peer: String,
+    peer_device_uuid: String,
     call_id: String,
     video: bool,
     microphone_muted: bool,
     camera_disabled: bool,
     incoming: bool,
+    signaling_status: String,
+    last_signal_poll_at: Instant,
+}
+
+struct CallSignalResult {
+    result: Result<Vec<CallSignalItem>, String>,
 }
 
 impl MessengerApp {
@@ -279,6 +287,7 @@ impl MessengerApp {
             save_file_rx: None,
             trust_rx: None,
             call_rx: None,
+            call_signal_rx: None,
             active_call: None,
             last_sync_at: Instant::now(),
         }
@@ -810,6 +819,61 @@ impl MessengerApp {
         }
     }
 
+    fn poll_call_signals(&mut self) {
+        if let Some(rx) = self.call_signal_rx.take() {
+            match rx.try_recv() {
+                Ok(result) => match result.result {
+                    Ok(signals) => {
+                        if let Some(call) = self.active_call.as_mut() {
+                            for signal in signals {
+                                call.signaling_status = format!(
+                                    "signaling: {} at {}",
+                                    signal.kind, signal.created_at_unix_ms
+                                );
+                                if signal.kind == "hangup" {
+                                    self.status = self.t("call.ended");
+                                    self.active_call = None;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let localized = self.localize_status_error(&err);
+                        if let Some(call) = self.active_call.as_mut() {
+                            call.signaling_status = localized;
+                        }
+                    }
+                },
+                Err(mpsc::TryRecvError::Empty) => self.call_signal_rx = Some(rx),
+                Err(mpsc::TryRecvError::Disconnected) => {}
+            }
+            return;
+        }
+
+        let Some(call) = self.active_call.as_mut() else {
+            return;
+        };
+        if call.last_signal_poll_at.elapsed() < Duration::from_millis(1200) {
+            return;
+        }
+        let Some(auth) = self.auth.clone() else {
+            return;
+        };
+        call.last_signal_poll_at = Instant::now();
+        let core = self.core.clone();
+        let call_id = call.call_id.clone();
+        let (tx, rx) = mpsc::channel();
+        self.call_signal_rx = Some(rx);
+        thread::spawn(move || {
+            let rt = runtime();
+            let result = rt
+                .block_on(core.fetch_call_signals(&auth, Some(call_id)))
+                .map_err(|err| format!("Call signaling failed: {err}"));
+            let _ = tx.send(CallSignalResult { result });
+        });
+    }
+
     fn save_file_message(&mut self, index: usize) {
         if self.save_file_rx.is_some() {
             return;
@@ -1309,11 +1373,14 @@ impl MessengerApp {
         if let Some((call_id, video)) = incoming_call {
             self.active_call = Some(CallState {
                 peer: nick,
+                peer_device_uuid: msg.from_device_uuid,
                 call_id,
                 video,
                 microphone_muted: false,
                 camera_disabled: false,
                 incoming: true,
+                signaling_status: self.t("call.signaling_ready"),
+                last_signal_poll_at: Instant::now(),
             });
         }
     }
@@ -1341,6 +1408,7 @@ impl eframe::App for MessengerApp {
         self.poll_save_file_result();
         self.poll_trust_result();
         self.poll_call_result();
+        self.poll_call_signals();
         ctx.request_repaint_after(Duration::from_millis(800));
         if self.auth.is_some() && self.last_sync_at.elapsed() >= Duration::from_secs(2) {
             self.sync_incoming();
@@ -1867,9 +1935,11 @@ impl MessengerApp {
             return;
         };
         let peer = call.peer.clone();
+        let peer_device_uuid = call.peer_device_uuid.clone();
         let call_id = call.call_id.clone();
         let video = call.video;
         let incoming = call.incoming;
+        let signaling_status = call.signaling_status.clone();
         let mut microphone_muted = call.microphone_muted;
         let mut camera_disabled = call.camera_disabled;
         let active_label = if video {
@@ -1898,6 +1968,7 @@ impl MessengerApp {
                 ui.label(active_label);
                 ui.label(id_label);
                 ui.label(note_label);
+                ui.label(signaling_status);
                 ui.separator();
                 ui.horizontal(|ui| {
                     let mic_label = if microphone_muted {
@@ -1925,7 +1996,21 @@ impl MessengerApp {
                 });
             });
         if end_call {
+            if let Some(auth) = self.auth.clone() {
+                let core = self.core.clone();
+                thread::spawn(move || {
+                    let rt = runtime();
+                    let _ = rt.block_on(core.send_call_signal(
+                        &auth,
+                        call_id,
+                        peer_device_uuid,
+                        "hangup".to_string(),
+                        "{}".to_string(),
+                    ));
+                });
+            }
             self.active_call = None;
+            self.call_signal_rx = None;
             self.status = self.t("call.ended");
         } else if let Some(call) = self.active_call.as_mut() {
             call.microphone_muted = microphone_muted;
@@ -2105,20 +2190,32 @@ fn run_start_call_flow(
     }
     let sent = rt.block_on(core.send_call_invite_to_peer_with_id(
         &auth,
-        peer_device_uuid,
+        peer_device_uuid.clone(),
         call_id.clone(),
         video,
         message_id,
     ));
     match sent {
-        Ok(true) => Ok(CallState {
-            peer,
-            call_id,
-            video,
-            microphone_muted: false,
-            camera_disabled: false,
-            incoming: false,
-        }),
+        Ok(true) => {
+            let _ = rt.block_on(core.send_call_signal(
+                &auth,
+                call_id.clone(),
+                peer_device_uuid.clone(),
+                "invite".to_string(),
+                format!("{{\"video\":{video}}}"),
+            ));
+            Ok(CallState {
+                peer,
+                peer_device_uuid,
+                call_id,
+                video,
+                microphone_muted: false,
+                camera_disabled: false,
+                incoming: false,
+                signaling_status: "signaling ready".to_string(),
+                last_signal_poll_at: Instant::now(),
+            })
+        }
         Ok(false) => Err("Peer session missing. Re-open chat.".to_string()),
         Err(err) => Err(format!("Call failed: {err}")),
     }

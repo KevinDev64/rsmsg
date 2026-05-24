@@ -5,13 +5,14 @@ use shared::{
     AckMessageRequest, AppendBlobChunkRequest, AppendBlobChunkResponse, BlockUserRequest,
     BlockUserResponse, BlockedUsersResponse, CreateBlobResponse, DeviceLoginRequest,
     DeviceLoginResponse, DeviceLogoutRequest, DeviceLogoutResponse, FetchBlobRequest,
-    FetchPendingRequest, FetchPendingResponse, FetchPrekeyBundleRequest, FetchPrekeyBundleResponse,
-    MessageStatusRequest, MessageStatusResponse, RegisterDeviceRequest, RegisterDeviceResponse,
-    ResolveDeviceRequest, ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse,
-    SendMessageRequest, SendMessageResponse, UnblockUserRequest, UnblockUserResponse,
-    UploadPrekeysRequest, UploadPrekeysResponse, UserLoginRequest, UserLoginResponse,
-    UserOnlineRequest, UserOnlineResponse, UserRegisterRequest, UserRegisterResponse,
-    UserSearchRequest, UserSearchResponse,
+    FetchCallSignalsRequest, FetchCallSignalsResponse, FetchPendingRequest, FetchPendingResponse,
+    FetchPrekeyBundleRequest, FetchPrekeyBundleResponse, MessageStatusRequest,
+    MessageStatusResponse, RegisterDeviceRequest, RegisterDeviceResponse, ResolveDeviceRequest,
+    ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse, SendCallSignalRequest,
+    SendCallSignalResponse, SendMessageRequest, SendMessageResponse, UnblockUserRequest,
+    UnblockUserResponse, UploadPrekeysRequest, UploadPrekeysResponse, UserLoginRequest,
+    UserLoginResponse, UserOnlineRequest, UserOnlineResponse, UserRegisterRequest,
+    UserRegisterResponse, UserSearchRequest, UserSearchResponse,
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -335,6 +336,53 @@ impl ApiTransport {
             .await?;
         if !response.status().is_success() {
             return Err(anyhow!("message_status failed with {}", response.status()));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn send_call_signal(
+        &self,
+        auth: &DeviceAuth,
+        req: SendCallSignalRequest,
+    ) -> Result<SendCallSignalResponse> {
+        let url = format!("{}/v1/send_call_signal", self.cfg.http_base);
+        let response = self
+            .client
+            .post(url)
+            .headers(self.auth_headers(auth)?)
+            .json(&req)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(api_error_message(status, body)));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn fetch_call_signals(
+        &self,
+        auth: &DeviceAuth,
+        call_id: Option<String>,
+        limit: Option<usize>,
+    ) -> Result<FetchCallSignalsResponse> {
+        let url = format!("{}/v1/fetch_call_signals", self.cfg.http_base);
+        let response = self
+            .client
+            .post(url)
+            .headers(self.auth_headers(auth)?)
+            .json(&FetchCallSignalsRequest {
+                device_uuid: auth.device_uuid.clone(),
+                call_id,
+                limit,
+            })
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(api_error_message(status, body)));
         }
         Ok(response.json().await?)
     }
