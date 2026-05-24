@@ -1408,7 +1408,7 @@ impl eframe::App for MessengerApp {
             }
             ui.separator();
 
-            let composer_height = 96.0;
+            let composer_height = 128.0;
             let history_height = (ui.available_height() - composer_height).max(120.0);
             egui::ScrollArea::vertical()
                 .stick_to_bottom(true)
@@ -1439,13 +1439,13 @@ impl eframe::App for MessengerApp {
             let message_hint = self.t("chat.message_hint");
             let response = egui::ScrollArea::vertical()
                 .id_salt("message_composer_scroll")
-                .max_height(84.0)
+                .max_height(64.0)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.add_sized(
-                        [ui.available_width(), 84.0],
+                        [ui.available_width(), 64.0],
                         egui::TextEdit::multiline(&mut self.message_input)
-                            .desired_rows(4)
+                            .desired_rows(3)
                             .hint_text(message_hint),
                     )
                 })
