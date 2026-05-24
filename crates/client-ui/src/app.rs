@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::{
     history::{ChatHistory, ChatMessage, MessageStatus, now_ms},
     localization::Localization,
+    media,
     message_ui::render_message_bubble,
     notifications,
     settings::{AppLanguage, AppSettings, AppTheme},
@@ -65,6 +66,8 @@ pub struct MessengerApp {
     call_rx: Option<Receiver<CallResult>>,
     call_signal_rx: Option<Receiver<CallSignalResult>>,
     active_call: Option<CallState>,
+    microphone_devices: Vec<String>,
+    camera_devices: Vec<String>,
     last_sync_at: Instant,
 }
 
@@ -290,7 +293,22 @@ impl MessengerApp {
             call_rx: None,
             call_signal_rx: None,
             active_call: None,
+            microphone_devices: media::microphone_devices(),
+            camera_devices: media::camera_devices(),
             last_sync_at: Instant::now(),
+        }
+    }
+
+    fn refresh_media_devices(&mut self) {
+        self.microphone_devices = media::microphone_devices();
+        self.camera_devices = media::camera_devices();
+    }
+
+    fn media_device_label(&self, value: &str) -> String {
+        if value == media::SYSTEM_DEFAULT_DEVICE {
+            self.t("call.system_default")
+        } else {
+            value.to_string()
         }
     }
 
@@ -1852,26 +1870,50 @@ impl MessengerApp {
                         ui.separator();
                         ui.heading(self.t("call.media_devices"));
                         let system_default = self.t("call.system_default");
+                        let no_devices = self.t("call.no_devices_found");
                         ui.label(self.t("call.microphone"));
                         egui::ComboBox::from_id_salt("microphone_select")
-                            .selected_text(&self.settings.microphone)
+                            .selected_text(self.media_device_label(&self.settings.microphone))
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut self.settings.microphone,
-                                    "System default".to_string(),
+                                    media::SYSTEM_DEFAULT_DEVICE.to_string(),
                                     system_default.clone(),
                                 );
+                                for device in &self.microphone_devices {
+                                    ui.selectable_value(
+                                        &mut self.settings.microphone,
+                                        device.clone(),
+                                        device,
+                                    );
+                                }
                             });
+                        if self.microphone_devices.is_empty() {
+                            ui.label(&no_devices);
+                        }
                         ui.label(self.t("call.camera"));
                         egui::ComboBox::from_id_salt("camera_select")
-                            .selected_text(&self.settings.camera)
+                            .selected_text(self.media_device_label(&self.settings.camera))
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut self.settings.camera,
-                                    "System default".to_string(),
-                                    system_default,
+                                    media::SYSTEM_DEFAULT_DEVICE.to_string(),
+                                    system_default.clone(),
                                 );
+                                for device in &self.camera_devices {
+                                    ui.selectable_value(
+                                        &mut self.settings.camera,
+                                        device.clone(),
+                                        device,
+                                    );
+                                }
                             });
+                        if self.camera_devices.is_empty() {
+                            ui.label(self.t("call.camera_stack_pending"));
+                        }
+                        if ui.button(self.t("call.refresh_devices")).clicked() {
+                            self.refresh_media_devices();
+                        }
                         self.settings.save();
 
                         ui.separator();

@@ -90,5 +90,5 @@ fn system_language_code() -> &'static str {
 }
 
 fn default_media_device() -> String {
-    "System default".to_string()
+    crate::media::SYSTEM_DEFAULT_DEVICE.to_string()
 }

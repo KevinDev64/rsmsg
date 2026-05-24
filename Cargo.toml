@@ -20,6 +20,7 @@ argon2 = "0.5"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 chacha20poly1305 = { version = "0.10", features = ["std"] }
+cpal = "0.16"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 eframe = "0.33"
 egui = "0.33"

@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 client-core = { path = "../client-core" }
+cpal.workspace = true
 eframe.workspace = true
 egui.workspace = true
 notify-rust.workspace = true

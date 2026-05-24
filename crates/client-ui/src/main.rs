@@ -1,6 +1,7 @@
 mod app;
 mod history;
 mod localization;
+mod media;
 mod message_ui;
 mod notifications;
 mod settings;
