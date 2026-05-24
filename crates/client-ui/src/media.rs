@@ -1,12 +1,19 @@
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicU32, Ordering},
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, Ordering},
+        mpsc,
+    },
+    thread,
 };
 
 use anyhow::{Result, anyhow};
+use bytes::Bytes;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use webrtc::{
     api::APIBuilder,
+    data_channel::{RTCDataChannel, data_channel_message::DataChannelMessage},
     peer_connection::{
         RTCPeerConnection, configuration::RTCConfiguration,
         sdp::session_description::RTCSessionDescription,
@@ -39,9 +46,17 @@ pub struct MediaSession {
     level: Arc<AtomicU32>,
 }
 
+pub struct AudioPlayback {
+    _stream: cpal::Stream,
+    _queue: Arc<Mutex<VecDeque<f32>>>,
+}
+
 pub struct WebRtcSession {
     peer_connection: Arc<RTCPeerConnection>,
     status: Arc<Mutex<String>>,
+    _data_channel: Arc<Mutex<Option<Arc<RTCDataChannel>>>>,
+    outbound_audio_tx: mpsc::Sender<Vec<u8>>,
+    playback_queue: Arc<Mutex<VecDeque<f32>>>,
 }
 
 impl MediaSession {
@@ -57,6 +72,14 @@ impl WebRtcSession {
 
     pub async fn close(&self) {
         let _ = self.peer_connection.close().await;
+    }
+
+    pub fn audio_sender(&self) -> mpsc::Sender<Vec<u8>> {
+        self.outbound_audio_tx.clone()
+    }
+
+    pub fn playback_queue(&self) -> Arc<Mutex<VecDeque<f32>>> {
+        self.playback_queue.clone()
     }
 
     pub async fn create_offer() -> Result<(Self, String)> {
@@ -105,6 +128,28 @@ impl WebRtcSession {
         let api = APIBuilder::new().build();
         let peer_connection = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await?);
         let status = Arc::new(Mutex::new("WebRTC starting".to_string()));
+        let data_channel: Arc<Mutex<Option<Arc<RTCDataChannel>>>> = Arc::new(Mutex::new(None));
+        let playback_queue = Arc::new(Mutex::new(VecDeque::<f32>::new()));
+        let (outbound_audio_tx, outbound_audio_rx) = mpsc::channel::<Vec<u8>>();
+        let data_channel_for_sender = data_channel.clone();
+        let status_for_sender = status.clone();
+        thread::spawn(move || {
+            let Ok(rt) = tokio::runtime::Runtime::new() else {
+                return;
+            };
+            while let Ok(frame) = outbound_audio_rx.recv() {
+                let channel = data_channel_for_sender
+                    .lock()
+                    .expect("webrtc_data_channel")
+                    .clone();
+                if let Some(channel) = channel {
+                    if rt.block_on(channel.send(&Bytes::from(frame))).is_err() {
+                        *status_for_sender.lock().expect("webrtc_status") =
+                            "WebRTC audio send failed".to_string();
+                    }
+                }
+            }
+        });
         let status_for_state = status.clone();
         peer_connection.on_peer_connection_state_change(Box::new(move |state| {
             *status_for_state.lock().expect("webrtc_status") = format!("WebRTC {state}");
@@ -114,32 +159,50 @@ impl WebRtcSession {
             let channel = peer_connection
                 .create_data_channel("rsmsg-call", None)
                 .await?;
+            *data_channel.lock().expect("webrtc_data_channel") = Some(channel.clone());
             let status_for_channel = status.clone();
             channel.on_open(Box::new(move || {
                 *status_for_channel.lock().expect("webrtc_status") =
                     "WebRTC data channel open".to_string();
                 Box::pin(async {})
             }));
+            attach_audio_receiver(channel, playback_queue.clone(), status.clone());
         } else {
             let status_for_channel = status.clone();
+            let data_channel_for_handler = data_channel.clone();
+            let playback_queue_for_handler = playback_queue.clone();
             peer_connection.on_data_channel(Box::new(move |channel| {
+                *data_channel_for_handler
+                    .lock()
+                    .expect("webrtc_data_channel") = Some(channel.clone());
                 let status_for_open = status_for_channel.clone();
                 channel.on_open(Box::new(move || {
                     *status_for_open.lock().expect("webrtc_status") =
                         "WebRTC data channel open".to_string();
                     Box::pin(async {})
                 }));
+                attach_audio_receiver(
+                    channel,
+                    playback_queue_for_handler.clone(),
+                    status_for_channel.clone(),
+                );
                 Box::pin(async {})
             }));
         }
         Ok(Self {
             peer_connection,
             status,
+            _data_channel: data_channel,
+            outbound_audio_tx,
+            playback_queue,
         })
     }
 }
 
-pub fn start_microphone_capture(device_name: &str) -> Result<MediaSession> {
+pub fn start_microphone_capture_with_sender(
+    device_name: &str,
+    audio_tx: Option<mpsc::Sender<Vec<u8>>>,
+) -> Result<MediaSession> {
     let host = cpal::default_host();
     let device = if device_name == SYSTEM_DEFAULT_DEVICE {
         host.default_input_device()
@@ -153,16 +216,33 @@ pub fn start_microphone_capture(device_name: &str) -> Result<MediaSession> {
     .ok_or_else(|| anyhow!("microphone not found"))?;
     let config = device.default_input_config()?;
     let level = Arc::new(AtomicU32::new(0));
+    let sample_rate = config.sample_rate().0;
+    let channels = config.channels() as usize;
     let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => {
-            build_input_stream::<f32>(&device, config.into(), level.clone())?
-        }
-        cpal::SampleFormat::I16 => {
-            build_input_stream::<i16>(&device, config.into(), level.clone())?
-        }
-        cpal::SampleFormat::U16 => {
-            build_input_stream::<u16>(&device, config.into(), level.clone())?
-        }
+        cpal::SampleFormat::F32 => build_input_stream::<f32>(
+            &device,
+            config.into(),
+            level.clone(),
+            sample_rate,
+            channels,
+            audio_tx,
+        )?,
+        cpal::SampleFormat::I16 => build_input_stream::<i16>(
+            &device,
+            config.into(),
+            level.clone(),
+            sample_rate,
+            channels,
+            audio_tx,
+        )?,
+        cpal::SampleFormat::U16 => build_input_stream::<u16>(
+            &device,
+            config.into(),
+            level.clone(),
+            sample_rate,
+            channels,
+            audio_tx,
+        )?,
         other => return Err(anyhow!("unsupported microphone sample format: {other:?}")),
     };
     stream.play()?;
@@ -176,10 +256,15 @@ fn build_input_stream<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
     level: Arc<AtomicU32>,
+    sample_rate: u32,
+    channels: usize,
+    audio_tx: Option<mpsc::Sender<Vec<u8>>>,
 ) -> Result<cpal::Stream>
 where
     T: cpal::SizedSample + SampleLevel,
 {
+    let mut frame = Vec::with_capacity((sample_rate / 50) as usize);
+    let frame_samples = (sample_rate / 50).max(160) as usize;
     Ok(device.build_input_stream(
         &config,
         move |data: &[T], _| {
@@ -189,6 +274,21 @@ where
                 .fold(0.0_f32, f32::max)
                 .clamp(0.0, 1.0);
             level.store((peak * 1000.0) as u32, Ordering::Relaxed);
+            if let Some(audio_tx) = audio_tx.as_ref() {
+                for chunk in data.chunks(channels.max(1)) {
+                    let mono = chunk
+                        .iter()
+                        .map(SampleLevel::sample_level_signed)
+                        .sum::<f32>()
+                        / chunk.len().max(1) as f32;
+                    frame.push(mono.clamp(-1.0, 1.0));
+                    if frame.len() >= frame_samples {
+                        let payload = encode_audio_frame(sample_rate, &frame);
+                        let _ = audio_tx.send(payload);
+                        frame.clear();
+                    }
+                }
+            }
         },
         move |_| {},
         None,
@@ -197,11 +297,16 @@ where
 
 trait SampleLevel {
     fn sample_level(&self) -> f32;
+    fn sample_level_signed(&self) -> f32;
 }
 
 impl SampleLevel for f32 {
     fn sample_level(&self) -> f32 {
         self.abs()
+    }
+
+    fn sample_level_signed(&self) -> f32 {
+        *self
     }
 }
 
@@ -209,10 +314,127 @@ impl SampleLevel for i16 {
     fn sample_level(&self) -> f32 {
         (*self as f32 / i16::MAX as f32).abs()
     }
+
+    fn sample_level_signed(&self) -> f32 {
+        *self as f32 / i16::MAX as f32
+    }
 }
 
 impl SampleLevel for u16 {
     fn sample_level(&self) -> f32 {
         ((*self as f32 - 32768.0) / 32768.0).abs()
     }
+
+    fn sample_level_signed(&self) -> f32 {
+        (*self as f32 - 32768.0) / 32768.0
+    }
+}
+
+fn attach_audio_receiver(
+    channel: Arc<RTCDataChannel>,
+    playback_queue: Arc<Mutex<VecDeque<f32>>>,
+    status: Arc<Mutex<String>>,
+) {
+    channel.on_message(Box::new(move |message: DataChannelMessage| {
+        if let Some(samples) = decode_audio_frame(&message.data) {
+            let mut queue = playback_queue.lock().expect("audio_playback_queue");
+            queue.extend(samples);
+            while queue.len() > 48_000 {
+                queue.pop_front();
+            }
+        } else {
+            *status.lock().expect("webrtc_status") = "Unknown WebRTC message".to_string();
+        }
+        Box::pin(async {})
+    }));
+}
+
+pub fn start_audio_playback(queue: Arc<Mutex<VecDeque<f32>>>) -> Result<AudioPlayback> {
+    let host = cpal::default_host();
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| anyhow!("speaker not found"))?;
+    let config = device.default_output_config()?;
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::F32 => {
+            build_output_stream::<f32>(&device, config.into(), queue.clone())?
+        }
+        cpal::SampleFormat::I16 => {
+            build_output_stream::<i16>(&device, config.into(), queue.clone())?
+        }
+        cpal::SampleFormat::U16 => {
+            build_output_stream::<u16>(&device, config.into(), queue.clone())?
+        }
+        other => return Err(anyhow!("unsupported speaker sample format: {other:?}")),
+    };
+    stream.play()?;
+    Ok(AudioPlayback {
+        _stream: stream,
+        _queue: queue,
+    })
+}
+
+fn build_output_stream<T>(
+    device: &cpal::Device,
+    config: cpal::StreamConfig,
+    queue: Arc<Mutex<VecDeque<f32>>>,
+) -> Result<cpal::Stream>
+where
+    T: cpal::SizedSample + OutputSample,
+{
+    Ok(device.build_output_stream(
+        &config,
+        move |out: &mut [T], _| {
+            let mut queue = queue.lock().expect("audio_playback_queue");
+            for sample in out {
+                let value = queue.pop_front().unwrap_or_default();
+                *sample = T::from_f32(value);
+            }
+        },
+        move |_| {},
+        None,
+    )?)
+}
+
+trait OutputSample {
+    fn from_f32(value: f32) -> Self;
+}
+
+impl OutputSample for f32 {
+    fn from_f32(value: f32) -> Self {
+        value.clamp(-1.0, 1.0)
+    }
+}
+
+impl OutputSample for i16 {
+    fn from_f32(value: f32) -> Self {
+        (value.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
+    }
+}
+
+impl OutputSample for u16 {
+    fn from_f32(value: f32) -> Self {
+        ((value.clamp(-1.0, 1.0) * 32767.0) + 32768.0) as u16
+    }
+}
+
+fn encode_audio_frame(sample_rate: u32, samples: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + samples.len() * 4);
+    out.extend_from_slice(b"RSA1");
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    for sample in samples {
+        out.extend_from_slice(&sample.to_le_bytes());
+    }
+    out
+}
+
+fn decode_audio_frame(payload: &[u8]) -> Option<Vec<f32>> {
+    if payload.len() < 8 || &payload[..4] != b"RSA1" {
+        return None;
+    }
+    let mut samples = Vec::with_capacity((payload.len() - 8) / 4);
+    for chunk in payload[8..].chunks_exact(4) {
+        samples.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]).clamp(-1.0, 1.0));
+    }
+    Some(samples)
 }

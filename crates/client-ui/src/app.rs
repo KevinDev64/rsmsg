@@ -71,6 +71,7 @@ pub struct MessengerApp {
     camera_devices: Vec<String>,
     media_session: Option<media::MediaSession>,
     webrtc_session: Option<media::WebRtcSession>,
+    audio_playback: Option<media::AudioPlayback>,
     media_failed_call_id: Option<String>,
     last_sync_at: Instant,
 }
@@ -312,6 +313,7 @@ impl MessengerApp {
             camera_devices: media::camera_devices(),
             media_session: None,
             webrtc_session: None,
+            audio_playback: None,
             media_failed_call_id: None,
             last_sync_at: Instant::now(),
         }
@@ -345,7 +347,11 @@ impl MessengerApp {
         {
             return;
         }
-        match media::start_microphone_capture(&self.settings.microphone) {
+        let audio_tx = self
+            .webrtc_session
+            .as_ref()
+            .map(media::WebRtcSession::audio_sender);
+        match media::start_microphone_capture_with_sender(&self.settings.microphone, audio_tx) {
             Ok(session) => self.media_session = Some(session),
             Err(err) => {
                 let media_error = self.tf("call.media_error", &[("error", &err.to_string())]);
@@ -1037,6 +1043,8 @@ impl MessengerApp {
         match rx.try_recv() {
             Ok(result) => match result.result {
                 Ok((session, action)) => {
+                    self.audio_playback =
+                        media::start_audio_playback(session.playback_queue()).ok();
                     self.webrtc_session = Some(session);
                     match action {
                         WebRtcAction::LocalOffer { offer_payload } => {
@@ -1092,6 +1100,7 @@ impl MessengerApp {
 
     fn stop_webrtc_session(&mut self) {
         self.webrtc_rx = None;
+        self.audio_playback = None;
         if let Some(session) = self.webrtc_session.take() {
             thread::spawn(move || {
                 let rt = runtime();
