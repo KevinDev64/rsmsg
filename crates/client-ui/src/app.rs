@@ -1467,8 +1467,6 @@ impl eframe::App for MessengerApp {
                 while self.message_input.ends_with(['\n', '\r']) {
                     self.message_input.pop();
                 }
-                #[cfg(target_os = "macos")]
-                response.surrender_focus();
                 self.send_current_message();
             }
             ui.horizontal(|ui| {
@@ -1479,8 +1477,6 @@ impl eframe::App for MessengerApp {
                     )
                     .clicked()
                 {
-                    #[cfg(target_os = "macos")]
-                    response.surrender_focus();
                     self.send_current_message();
                 }
                 if ui
