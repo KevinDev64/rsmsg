@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     api_error::{ApiError, ApiResult},
+    domain::realtime,
     repository::auth_tokens,
 };
 
@@ -39,6 +40,7 @@ pub async fn authorize_device(db: &sqlx::PgPool, headers: &HeaderMap) -> ApiResu
         .map_err(|err| ApiError::database("authorize_device token lookup failed", err))?;
 
     if active {
+        realtime::mark_online(device_uuid).await;
         Ok(device_uuid)
     } else {
         Err(ApiError::new(
