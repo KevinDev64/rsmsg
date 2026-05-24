@@ -6,8 +6,9 @@ use axum::{
 use shared::{
     BlockUserRequest, BlockUserResponse, BlockedUsersResponse, ResolveDeviceRequest,
     ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse, UnblockUserRequest,
-    UnblockUserResponse, UserLoginRequest, UserLoginResponse, UserRegisterRequest,
-    UserRegisterResponse, UserSearchRequest, UserSearchResponse,
+    UnblockUserResponse, UserLoginRequest, UserLoginResponse, UserOnlineRequest,
+    UserOnlineResponse, UserRegisterRequest, UserRegisterResponse, UserSearchRequest,
+    UserSearchResponse,
 };
 
 use crate::{
@@ -65,6 +66,13 @@ pub async fn user_search(
     Json(payload): Json<UserSearchRequest>,
 ) -> ApiResult<Json<UserSearchResponse>> {
     Ok(Json(user::search_users(&state.db, payload).await?))
+}
+
+pub async fn user_online(
+    State(state): State<AppState>,
+    Json(payload): Json<UserOnlineRequest>,
+) -> ApiResult<Json<UserOnlineResponse>> {
+    Ok(Json(user::user_online(&state.db, payload).await?))
 }
 
 pub async fn block_user(

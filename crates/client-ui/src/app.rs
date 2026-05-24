@@ -62,6 +62,8 @@ pub struct MessengerApp {
     read_ack_rx: Option<Receiver<ReadAckResult>>,
     save_file_rx: Option<Receiver<SaveFileResult>>,
     trust_rx: Option<Receiver<TrustResult>>,
+    call_rx: Option<Receiver<CallResult>>,
+    active_call: Option<CallState>,
     last_sync_at: Instant,
 }
 
@@ -148,6 +150,19 @@ struct TrustResult {
     result: Result<FetchPrekeyBundleResponse, String>,
 }
 
+struct CallResult {
+    result: Result<CallState, String>,
+}
+
+struct CallState {
+    peer: String,
+    call_id: String,
+    video: bool,
+    microphone_muted: bool,
+    camera_disabled: bool,
+    incoming: bool,
+}
+
 impl MessengerApp {
     fn t(&self, key: &str) -> String {
         self.localization.text(key)
@@ -173,6 +188,7 @@ impl MessengerApp {
                 "you blocked recipient",
                 &self.t("error.you_blocked_recipient"),
             )
+            .replace("user is not online", &self.t("call.user_offline"))
     }
 
     fn is_user_blocked(&self, user_id: &str) -> bool {
@@ -262,6 +278,8 @@ impl MessengerApp {
             read_ack_rx: None,
             save_file_rx: None,
             trust_rx: None,
+            call_rx: None,
+            active_call: None,
             last_sync_at: Instant::now(),
         }
     }
@@ -733,6 +751,65 @@ impl MessengerApp {
         });
     }
 
+    fn start_call(&mut self, video: bool) {
+        if self.call_rx.is_some() || self.active_call.is_some() {
+            return;
+        }
+        let Some(auth) = self.auth.clone() else {
+            self.status = self.t("error.log_in_first");
+            return;
+        };
+        if self.selected_chat.is_empty() {
+            self.status = self.t("status.select_chat_first");
+            return;
+        }
+        if self.is_user_blocked(&self.selected_chat) {
+            self.status = self.t("status.you_blocked_user");
+            return;
+        }
+        let Some(peer_device_uuid) = self.selected_chat_session() else {
+            return;
+        };
+        let peer = self.selected_chat.clone();
+        let core = self.core.clone();
+        let call_id = Uuid::new_v4().to_string();
+        let message_id = Uuid::new_v4().to_string();
+        let (tx, rx) = mpsc::channel();
+        self.call_rx = Some(rx);
+        self.status = self.tf("call.calling", &[("user", &peer)]);
+        thread::spawn(move || {
+            let result = run_start_call_flow(
+                core,
+                auth,
+                peer.clone(),
+                peer_device_uuid,
+                call_id,
+                video,
+                message_id,
+            );
+            let _ = tx.send(CallResult { result });
+        });
+    }
+
+    fn poll_call_result(&mut self) {
+        let Some(rx) = self.call_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(result) => match result.result {
+                Ok(call) => {
+                    self.status = self.tf("call.started", &[("user", &call.peer)]);
+                    self.active_call = Some(call);
+                }
+                Err(err) => self.status = self.localize_status_error(&err),
+            },
+            Err(mpsc::TryRecvError::Empty) => self.call_rx = Some(rx),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = self.t("call.worker_stopped");
+            }
+        }
+    }
+
     fn save_file_message(&mut self, index: usize) {
         if self.save_file_rx.is_some() {
             return;
@@ -1166,24 +1243,39 @@ impl MessengerApp {
 
     fn push_incoming(&mut self, msg: DecryptedMessage) {
         let payload = serde_json::from_str::<EncryptedMessagePayload>(&msg.plaintext).ok();
-        let (text, file_name, file_size, file_data_b64, blob_id, file_key_b64) = match payload {
-            Some(EncryptedMessagePayload::File {
-                file_name,
-                file_size,
-                data_b64,
-                blob_id,
-                file_key_b64,
-                ..
-            }) => (
-                format!("File: {file_name}"),
-                Some(file_name),
-                Some(file_size),
-                data_b64,
-                blob_id,
-                file_key_b64,
-            ),
-            None => (msg.plaintext, None, None, None, None, None),
-        };
+        let (text, file_name, file_size, file_data_b64, blob_id, file_key_b64, incoming_call) =
+            match payload {
+                Some(EncryptedMessagePayload::File {
+                    file_name,
+                    file_size,
+                    data_b64,
+                    blob_id,
+                    file_key_b64,
+                    ..
+                }) => (
+                    format!("File: {file_name}"),
+                    Some(file_name),
+                    Some(file_size),
+                    data_b64,
+                    blob_id,
+                    file_key_b64,
+                    None,
+                ),
+                Some(EncryptedMessagePayload::Call { call_id, video, .. }) => (
+                    if video {
+                        self.t("call.incoming_video_message")
+                    } else {
+                        self.t("call.incoming_audio_message")
+                    },
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some((call_id, video)),
+                ),
+                None => (msg.plaintext, None, None, None, None, None, None),
+            };
         let nick = self
             .history
             .peer_by_device_uuid
@@ -1212,7 +1304,17 @@ impl MessengerApp {
             file_key_b64,
         });
         if self.selected_chat != nick {
-            *self.history.unread_by_peer.entry(nick).or_default() += 1;
+            *self.history.unread_by_peer.entry(nick.clone()).or_default() += 1;
+        }
+        if let Some((call_id, video)) = incoming_call {
+            self.active_call = Some(CallState {
+                peer: nick,
+                call_id,
+                video,
+                microphone_muted: false,
+                camera_disabled: false,
+                incoming: true,
+            });
         }
     }
 }
@@ -1238,6 +1340,7 @@ impl eframe::App for MessengerApp {
         self.poll_read_ack_result();
         self.poll_save_file_result();
         self.poll_trust_result();
+        self.poll_call_result();
         ctx.request_repaint_after(Duration::from_millis(800));
         if self.auth.is_some() && self.last_sync_at.elapsed() >= Duration::from_secs(2) {
             self.sync_incoming();
@@ -1410,6 +1513,13 @@ impl eframe::App for MessengerApp {
                 if ui.button(self.t("chat.delete_chat")).clicked() {
                     self.request_delete_selected_chat();
                 }
+                ui.separator();
+                if ui.button(self.t("call.audio_call")).clicked() {
+                    self.start_call(false);
+                }
+                if ui.button(self.t("call.video_call")).clicked() {
+                    self.start_call(true);
+                }
             });
             if selected_blocked {
                 ui.label(self.t("block.you_blocked_banner"));
@@ -1508,6 +1618,9 @@ impl eframe::App for MessengerApp {
         if self.delete_chat_confirm.is_some() {
             self.render_delete_chat_window(ctx);
         }
+        if self.active_call.is_some() {
+            self.render_call_window(ctx);
+        }
         if self.hidden_to_tray {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
@@ -1531,125 +1644,157 @@ impl MessengerApp {
             .resizable(false)
             .default_width(360.0)
             .show(ctx, |ui| {
-                ui.heading(self.t("settings.appearance"));
-                let theme_system = self.t("settings.theme_system");
-                let theme_light = self.t("settings.theme_light");
-                let theme_dark = self.t("settings.theme_dark");
-                let mut changed = false;
-                changed |= ui
-                    .radio_value(&mut self.settings.theme, AppTheme::System, theme_system)
-                    .changed();
-                changed |= ui
-                    .radio_value(&mut self.settings.theme, AppTheme::Light, theme_light)
-                    .changed();
-                changed |= ui
-                    .radio_value(&mut self.settings.theme, AppTheme::Dark, theme_dark)
-                    .changed();
-                if changed {
-                    self.apply_theme(ctx);
-                    self.settings.save();
-                }
-
-                ui.separator();
-                ui.heading(self.t("settings.language"));
-                let selected_language = self.language_label(self.settings.language);
-                let language_system = self.t("settings.language_system");
-                let language_en = self.t("settings.language_en");
-                let language_ru = self.t("settings.language_ru");
-                let language_changed = egui::ComboBox::from_id_salt("language_select")
-                    .selected_text(selected_language)
-                    .show_ui(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(520.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.heading(self.t("settings.appearance"));
+                        let theme_system = self.t("settings.theme_system");
+                        let theme_light = self.t("settings.theme_light");
+                        let theme_dark = self.t("settings.theme_dark");
                         let mut changed = false;
                         changed |= ui
-                            .selectable_value(
-                                &mut self.settings.language,
-                                AppLanguage::System,
-                                language_system,
-                            )
+                            .radio_value(&mut self.settings.theme, AppTheme::System, theme_system)
                             .changed();
                         changed |= ui
-                            .selectable_value(
-                                &mut self.settings.language,
-                                AppLanguage::English,
-                                language_en,
-                            )
+                            .radio_value(&mut self.settings.theme, AppTheme::Light, theme_light)
                             .changed();
                         changed |= ui
-                            .selectable_value(
-                                &mut self.settings.language,
-                                AppLanguage::Russian,
-                                language_ru,
-                            )
+                            .radio_value(&mut self.settings.theme, AppTheme::Dark, theme_dark)
                             .changed();
-                        changed
-                    })
-                    .inner
-                    .unwrap_or(false);
-                if language_changed {
-                    self.localization = Localization::load(self.settings.language.code());
-                    self.settings.save();
-                    self.status = self.t("settings.language_updated");
-                }
+                        if changed {
+                            self.apply_theme(ctx);
+                            self.settings.save();
+                        }
 
-                ui.separator();
-                ui.heading(self.t("profile.title"));
-                ui.label(self.t("profile.default_username"));
-                let username_changed = ui
-                    .text_edit_singleline(&mut self.settings.default_username)
-                    .changed();
-                if username_changed {
-                    self.settings.default_username =
-                        self.settings.default_username.trim().to_string();
-                    if self.auth.is_none() {
-                        self.nickname = self.settings.default_username.clone();
-                    }
-                    self.settings.save();
-                }
-                if ui.button(self.t("profile.use_current_username")).clicked() {
-                    self.settings.default_username = self.nickname.trim().to_string();
-                    self.settings.save();
-                }
+                        ui.separator();
+                        ui.heading(self.t("settings.language"));
+                        let selected_language = self.language_label(self.settings.language);
+                        let language_system = self.t("settings.language_system");
+                        let language_en = self.t("settings.language_en");
+                        let language_ru = self.t("settings.language_ru");
+                        let language_changed = egui::ComboBox::from_id_salt("language_select")
+                            .selected_text(selected_language)
+                            .show_ui(ui, |ui| {
+                                let mut changed = false;
+                                changed |= ui
+                                    .selectable_value(
+                                        &mut self.settings.language,
+                                        AppLanguage::System,
+                                        language_system,
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .selectable_value(
+                                        &mut self.settings.language,
+                                        AppLanguage::English,
+                                        language_en,
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .selectable_value(
+                                        &mut self.settings.language,
+                                        AppLanguage::Russian,
+                                        language_ru,
+                                    )
+                                    .changed();
+                                changed
+                            })
+                            .inner
+                            .unwrap_or(false);
+                        if language_changed {
+                            self.localization = Localization::load(self.settings.language.code());
+                            self.settings.save();
+                            self.status = self.t("settings.language_updated");
+                        }
 
-                ui.separator();
-                ui.heading(self.t("connection.title"));
-                ui.label(self.t("connection.server"));
-                ui.text_edit_singleline(&mut self.server_input);
-                if self.auth.is_some() {
-                    if ui.button(self.t("connection.apply_after_logout")).clicked() {
-                        self.logout();
-                        self.apply_server_config();
-                    }
-                }
-
-                ui.separator();
-                ui.heading(self.t("privacy.title"));
-                ui.label(self.t("privacy.blocked_users"));
-                if self.blocked_users.is_empty() {
-                    ui.label(self.t("privacy.no_blocked_users"));
-                } else {
-                    let blocked_users = self.blocked_users.clone();
-                    for user in blocked_users {
-                        ui.horizontal(|ui| {
-                            ui.label(format!("@{user}"));
-                            if ui.button(self.t("block.unblock_user")).clicked() {
-                                self.unblock_user(user.clone());
+                        ui.separator();
+                        ui.heading(self.t("profile.title"));
+                        ui.label(self.t("profile.default_username"));
+                        let username_changed = ui
+                            .text_edit_singleline(&mut self.settings.default_username)
+                            .changed();
+                        if username_changed {
+                            self.settings.default_username =
+                                self.settings.default_username.trim().to_string();
+                            if self.auth.is_none() {
+                                self.nickname = self.settings.default_username.clone();
                             }
-                        });
-                    }
-                }
-                if ui.button(self.t("privacy.refresh_blocked_users")).clicked() {
-                    self.refresh_blocked_users();
-                }
+                            self.settings.save();
+                        }
+                        if ui.button(self.t("profile.use_current_username")).clicked() {
+                            self.settings.default_username = self.nickname.trim().to_string();
+                            self.settings.save();
+                        }
 
-                ui.separator();
-                ui.heading(self.t("about.title"));
-                ui.label(self.tf("about.version", &[("version", env!("CARGO_PKG_VERSION"))]));
-                ui.label(self.t("about.creator"));
+                        ui.separator();
+                        ui.heading(self.t("connection.title"));
+                        ui.label(self.t("connection.server"));
+                        ui.text_edit_singleline(&mut self.server_input);
+                        if self.auth.is_some() {
+                            if ui.button(self.t("connection.apply_after_logout")).clicked() {
+                                self.logout();
+                                self.apply_server_config();
+                            }
+                        }
 
-                ui.separator();
-                if ui.button(self.t("common.close")).clicked() {
-                    self.settings_open = false;
-                }
+                        ui.separator();
+                        ui.heading(self.t("privacy.title"));
+                        ui.label(self.t("privacy.blocked_users"));
+                        if self.blocked_users.is_empty() {
+                            ui.label(self.t("privacy.no_blocked_users"));
+                        } else {
+                            let blocked_users = self.blocked_users.clone();
+                            for user in blocked_users {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("@{user}"));
+                                    if ui.button(self.t("block.unblock_user")).clicked() {
+                                        self.unblock_user(user.clone());
+                                    }
+                                });
+                            }
+                        }
+                        if ui.button(self.t("privacy.refresh_blocked_users")).clicked() {
+                            self.refresh_blocked_users();
+                        }
+
+                        ui.separator();
+                        ui.heading(self.t("call.media_devices"));
+                        let system_default = self.t("call.system_default");
+                        ui.label(self.t("call.microphone"));
+                        egui::ComboBox::from_id_salt("microphone_select")
+                            .selected_text(&self.settings.microphone)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.settings.microphone,
+                                    "System default".to_string(),
+                                    system_default.clone(),
+                                );
+                            });
+                        ui.label(self.t("call.camera"));
+                        egui::ComboBox::from_id_salt("camera_select")
+                            .selected_text(&self.settings.camera)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.settings.camera,
+                                    "System default".to_string(),
+                                    system_default,
+                                );
+                            });
+                        self.settings.save();
+
+                        ui.separator();
+                        ui.heading(self.t("about.title"));
+                        ui.label(
+                            self.tf("about.version", &[("version", env!("CARGO_PKG_VERSION"))]),
+                        );
+                        ui.label(self.t("about.creator"));
+
+                        ui.separator();
+                        if ui.button(self.t("common.close")).clicked() {
+                            self.settings_open = false;
+                        }
+                    });
             });
         self.settings_open = open && self.settings_open;
     }
@@ -1712,6 +1857,79 @@ impl MessengerApp {
             });
         if !open {
             self.delete_chat_confirm = None;
+        }
+    }
+
+    fn render_call_window(&mut self, ctx: &egui::Context) {
+        let mut end_call = false;
+        let title = self.t("call.window_title");
+        let Some(call) = self.active_call.as_ref() else {
+            return;
+        };
+        let peer = call.peer.clone();
+        let call_id = call.call_id.clone();
+        let video = call.video;
+        let incoming = call.incoming;
+        let mut microphone_muted = call.microphone_muted;
+        let mut camera_disabled = call.camera_disabled;
+        let active_label = if video {
+            self.t("call.video_active")
+        } else {
+            self.t("call.audio_active")
+        };
+        let id_label = self.tf("call.id", &[("id", &call_id)]);
+        let note_label = if incoming {
+            self.t("call.incoming_note")
+        } else {
+            self.t("call.outgoing_note")
+        };
+        let unmute_label = self.t("call.unmute_microphone");
+        let mute_label = self.t("call.mute_microphone");
+        let enable_camera_label = self.t("call.enable_camera");
+        let disable_camera_label = self.t("call.disable_camera");
+        let hang_up_label = self.t("call.hang_up");
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(420.0)
+            .default_height(260.0)
+            .show(ctx, |ui| {
+                ui.heading(format!("@{peer}"));
+                ui.label(active_label);
+                ui.label(id_label);
+                ui.label(note_label);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let mic_label = if microphone_muted {
+                        unmute_label
+                    } else {
+                        mute_label
+                    };
+                    if ui.button(mic_label).clicked() {
+                        microphone_muted = !microphone_muted;
+                    }
+                    let camera_label = if camera_disabled {
+                        enable_camera_label
+                    } else {
+                        disable_camera_label
+                    };
+                    if ui
+                        .add_enabled(video, egui::Button::new(camera_label))
+                        .clicked()
+                    {
+                        camera_disabled = !camera_disabled;
+                    }
+                    if ui.button(hang_up_label).clicked() {
+                        end_call = true;
+                    }
+                });
+            });
+        if end_call {
+            self.active_call = None;
+            self.status = self.t("call.ended");
+        } else if let Some(call) = self.active_call.as_mut() {
+            call.microphone_muted = microphone_muted;
+            call.camera_disabled = camera_disabled;
         }
     }
 
@@ -1866,6 +2084,43 @@ fn run_send_flow(
         Ok(true) => Ok(()),
         Ok(false) => Err("Peer session missing. Re-open chat.".to_string()),
         Err(err) => Err(format!("Send failed: {err}")),
+    }
+}
+
+fn run_start_call_flow(
+    core: ClientCore,
+    auth: DeviceAuth,
+    peer: String,
+    peer_device_uuid: String,
+    call_id: String,
+    video: bool,
+    message_id: String,
+) -> Result<CallState, String> {
+    let rt = runtime();
+    let online = rt
+        .block_on(core.is_user_online(peer.clone(), DEFAULT_DEVICE_ID.to_string()))
+        .map_err(|err| format!("Online check failed: {err}"))?;
+    if !online {
+        return Err("user is not online".to_string());
+    }
+    let sent = rt.block_on(core.send_call_invite_to_peer_with_id(
+        &auth,
+        peer_device_uuid,
+        call_id.clone(),
+        video,
+        message_id,
+    ));
+    match sent {
+        Ok(true) => Ok(CallState {
+            peer,
+            call_id,
+            video,
+            microphone_muted: false,
+            camera_disabled: false,
+            incoming: false,
+        }),
+        Ok(false) => Err("Peer session missing. Re-open chat.".to_string()),
+        Err(err) => Err(format!("Call failed: {err}")),
     }
 }
 

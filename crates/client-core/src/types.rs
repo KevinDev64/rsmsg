@@ -82,6 +82,8 @@ pub enum EncryptedMessagePayload {
         #[serde(default)]
         file_key_b64: Option<String>,
     },
+    #[serde(rename = "call")]
+    Call { v: u8, call_id: String, video: bool },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

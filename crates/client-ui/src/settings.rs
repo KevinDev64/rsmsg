@@ -46,6 +46,10 @@ pub struct AppSettings {
     pub language: AppLanguage,
     #[serde(default)]
     pub default_username: String,
+    #[serde(default = "default_media_device")]
+    pub microphone: String,
+    #[serde(default = "default_media_device")]
+    pub camera: String,
 }
 
 impl AppSettings {
@@ -83,4 +87,8 @@ fn system_language_code() -> &'static str {
     } else {
         "en"
     }
+}
+
+fn default_media_device() -> String {
+    "System default".to_string()
 }

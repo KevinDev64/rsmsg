@@ -18,6 +18,7 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/user_register", post(user::user_register))
         .route("/v1/user_login", post(user::user_login))
         .route("/v1/user_search", post(user::user_search))
+        .route("/v1/user_online", post(user::user_online))
         .route("/v1/block_user", post(user::block_user))
         .route("/v1/unblock_user", post(user::unblock_user))
         .route("/v1/blocked_users", post(user::blocked_users))

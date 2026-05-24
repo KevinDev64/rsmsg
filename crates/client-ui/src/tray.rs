@@ -1,4 +1,7 @@
-use std::sync::mpsc::{self, Receiver};
+use std::sync::{
+    Arc,
+    mpsc::{self, Receiver},
+};
 
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
@@ -50,6 +53,22 @@ impl AppTray {
 }
 
 fn icon() -> Option<Icon> {
+    let _logo_svg = include_str!("../assets/logo.svg");
+    let (rgba, width, height) = icon_rgba();
+    Icon::from_rgba(rgba, width, height).ok()
+}
+
+pub fn app_icon() -> Arc<egui::IconData> {
+    let _logo_svg = include_str!("../assets/logo.svg");
+    let (rgba, width, height) = icon_rgba();
+    Arc::new(egui::IconData {
+        rgba,
+        width,
+        height,
+    })
+}
+
+fn icon_rgba() -> (Vec<u8>, u32, u32) {
     let size = 32_u32;
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);
     for y in 0..size {
@@ -64,5 +83,5 @@ fn icon() -> Option<Icon> {
             }
         }
     }
-    Icon::from_rgba(rgba, size, size).ok()
+    (rgba, size, size)
 }

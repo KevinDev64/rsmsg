@@ -158,6 +158,11 @@ impl ClientCore {
         Ok(response.users)
     }
 
+    pub async fn is_user_online(&self, user_id: String, device_id: String) -> Result<bool> {
+        let response = self.transport.user_online(user_id, device_id).await?;
+        Ok(response.online)
+    }
+
     pub async fn block_user(&self, auth: &DeviceAuth, user_id: String) -> Result<bool> {
         let response = self.transport.block_user(auth, user_id).await?;
         Ok(response.blocked)
@@ -339,6 +344,24 @@ impl ClientCore {
             data_b64: None,
             blob_id: Some(blob_id),
             file_key_b64: Some(file_key_b64),
+        };
+        let plaintext = serde_json::to_string(&payload)?;
+        self.send_text_to_peer_with_id(auth, peer_device_uuid, plaintext, message_id)
+            .await
+    }
+
+    pub async fn send_call_invite_to_peer_with_id(
+        &self,
+        auth: &DeviceAuth,
+        peer_device_uuid: String,
+        call_id: String,
+        video: bool,
+        message_id: String,
+    ) -> Result<bool> {
+        let payload = EncryptedMessagePayload::Call {
+            v: 1,
+            call_id,
+            video,
         };
         let plaintext = serde_json::to_string(&payload)?;
         self.send_text_to_peer_with_id(auth, peer_device_uuid, plaintext, message_id)

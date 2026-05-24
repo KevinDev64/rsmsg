@@ -6,13 +6,15 @@ use axum::http::StatusCode;
 use shared::{
     BlockUserRequest, BlockUserResponse, BlockedUsersResponse, ResolveDeviceRequest,
     ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse, UnblockUserRequest,
-    UnblockUserResponse, UserLoginRequest, UserLoginResponse, UserRegisterRequest,
-    UserRegisterResponse, UserSearchRequest, UserSearchResponse,
+    UnblockUserResponse, UserLoginRequest, UserLoginResponse, UserOnlineRequest,
+    UserOnlineResponse, UserRegisterRequest, UserRegisterResponse, UserSearchRequest,
+    UserSearchResponse,
 };
 use uuid::Uuid;
 
 use crate::{
     api_error::{ApiError, ApiResult},
+    domain::realtime,
     repository::{devices, registration_invites, user_blocks, users},
 };
 
@@ -186,6 +188,21 @@ pub async fn search_users(
         .await
         .map_err(|err| ApiError::database("user_search query failed", err))?;
     Ok(UserSearchResponse { users })
+}
+
+pub async fn user_online(
+    db: &sqlx::PgPool,
+    payload: UserOnlineRequest,
+) -> ApiResult<UserOnlineResponse> {
+    let Some(device_uuid) = devices::find_device_uuid(db, payload.user_id, payload.device_id)
+        .await
+        .map_err(|err| ApiError::database("user_online device lookup failed", err))?
+    else {
+        return Ok(UserOnlineResponse { online: false });
+    };
+    Ok(UserOnlineResponse {
+        online: realtime::is_online(device_uuid).await,
+    })
 }
 
 pub async fn block_user(

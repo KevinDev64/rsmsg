@@ -247,3 +247,14 @@ pub struct UnblockUserResponse {
 pub struct BlockedUsersResponse {
     pub users: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserOnlineRequest {
+    pub user_id: String,
+    pub device_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserOnlineResponse {
+    pub online: bool,
+}

@@ -10,7 +10,8 @@ use shared::{
     ResolveDeviceRequest, ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse,
     SendMessageRequest, SendMessageResponse, UnblockUserRequest, UnblockUserResponse,
     UploadPrekeysRequest, UploadPrekeysResponse, UserLoginRequest, UserLoginResponse,
-    UserRegisterRequest, UserRegisterResponse, UserSearchRequest, UserSearchResponse,
+    UserOnlineRequest, UserOnlineResponse, UserRegisterRequest, UserRegisterResponse,
+    UserSearchRequest, UserSearchResponse,
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -78,6 +79,24 @@ impl ApiTransport {
             .await?;
         if !response.status().is_success() {
             return Err(anyhow!("user_search failed with {}", response.status()));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn user_online(
+        &self,
+        user_id: String,
+        device_id: String,
+    ) -> Result<UserOnlineResponse> {
+        let url = format!("{}/v1/user_online", self.cfg.http_base);
+        let response = self
+            .client
+            .post(url)
+            .json(&UserOnlineRequest { user_id, device_id })
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow!("user_online failed with {}", response.status()));
         }
         Ok(response.json().await?)
     }

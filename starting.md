@@ -126,6 +126,7 @@ RSMSG_PROFILE=bob cargo run -p client-ui
 - `POST /v1/user_register`
 - `POST /v1/user_login`
 - `POST /v1/user_search`
+- `POST /v1/user_online`
 - `POST /v1/block_user`
 - `POST /v1/unblock_user`
 - `POST /v1/blocked_users`
