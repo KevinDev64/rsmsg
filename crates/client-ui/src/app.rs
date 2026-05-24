@@ -441,13 +441,10 @@ impl MessengerApp {
         self.history
             .device_uuid_by_peer
             .insert(success.peer.clone(), success.resolved_uuid);
-        let read_changed = self
-            .auth
-            .clone()
-            .is_some_and(|auth| self.mark_selected_chat_read(auth));
-        if read_changed {
-            self.save_history();
+        if let Some(auth) = self.auth.clone() {
+            self.mark_selected_chat_read(auth);
         }
+        self.save_history();
         self.status = format!("Chat with @{} ready", success.peer);
     }
 
@@ -883,6 +880,7 @@ impl MessengerApp {
         self.sync_rx = Some(rx);
         let core = self.core.clone();
         let peer_by_device_uuid = self.history.peer_by_device_uuid.clone();
+        let peers_missing_safety = self.peers_missing_safety_numbers();
         let outgoing_message_ids = self.outgoing_message_ids();
         thread::spawn(move || {
             let result = run_sync_flow(
@@ -890,6 +888,7 @@ impl MessengerApp {
                 local_keys,
                 auth,
                 peer_by_device_uuid,
+                peers_missing_safety,
                 outgoing_message_ids,
             );
             let _ = tx.send(SyncResult { result });
@@ -1029,6 +1028,15 @@ impl MessengerApp {
             .flat_map(|messages| messages.iter())
             .filter(|message| message.outgoing && message.status != MessageStatus::Read)
             .filter_map(|message| message.message_id.clone())
+            .collect()
+    }
+
+    fn peers_missing_safety_numbers(&self) -> Vec<String> {
+        self.history
+            .device_uuid_by_peer
+            .keys()
+            .filter(|peer| self.peer_safety_number(peer).is_none())
+            .cloned()
             .collect()
     }
 
@@ -1880,6 +1888,7 @@ fn run_sync_flow(
     local_keys: LocalDeviceKeys,
     auth: DeviceAuth,
     peer_by_device_uuid: BTreeMap<String, String>,
+    peers_missing_safety: Vec<String>,
     outgoing_message_ids: Vec<String>,
 ) -> Result<SyncSuccess, String> {
     let rt = runtime();
@@ -1895,7 +1904,9 @@ fn run_sync_flow(
                 .ok()
         };
         if let Some(peer) = peer {
-            if !core.has_peer_session(&item.from_device_uuid) {
+            if !core.has_peer_session(&item.from_device_uuid)
+                || peers_missing_safety.iter().any(|missing| missing == &peer)
+            {
                 if let Ok((_key, bundle)) = rt.block_on(core.derive_peer_shared_key(
                     &local_keys,
                     peer.clone(),
