@@ -50,7 +50,7 @@
   "privacy.refresh_blocked_users": "Обновить список",
   "privacy.title": "Приватность",
   "security.key_changed": "У @{peer} изменился ключ",
-  "security.open_chat_to_pin": "Откройте чат, чтобы закрепить ключ",
+  "security.open_chat_to_pin": "Начните общаться, и ключ скоро появится",
   "security.peer_fingerprint": "Отпечаток @{peer}",
   "security.title": "Безопасность",
   "security.trust_new_key": "Доверять новому ключу",

@@ -50,7 +50,7 @@
   "privacy.refresh_blocked_users": "Refresh blocked users",
   "privacy.title": "Privacy",
   "security.key_changed": "@{peer} key changed",
-  "security.open_chat_to_pin": "Open chat to pin identity key",
+  "security.open_chat_to_pin": "Start chatting and the key will appear soon",
   "security.peer_fingerprint": "@{peer} fingerprint",
   "security.title": "Security",
   "security.trust_new_key": "Trust new key",
