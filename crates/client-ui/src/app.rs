@@ -38,6 +38,7 @@ pub struct MessengerApp {
     localization: Localization,
     settings_open: bool,
     create_account_open: bool,
+    delete_chat_confirm: Option<String>,
     register_nickname: String,
     register_password: String,
     register_invite_code: String,
@@ -201,6 +202,7 @@ impl MessengerApp {
             localization,
             settings_open: false,
             create_account_open: false,
+            delete_chat_confirm: None,
             register_nickname: String::new(),
             register_password: String::new(),
             register_invite_code: String::new(),
@@ -482,6 +484,25 @@ impl MessengerApp {
             return;
         };
         self.run_block_action(auth, BlockAction::Unblock(user_id));
+    }
+
+    fn request_delete_selected_chat(&mut self) {
+        if self.selected_chat.is_empty() {
+            self.status = self.t("status.select_chat_first");
+            return;
+        }
+        self.delete_chat_confirm = Some(self.selected_chat.clone());
+    }
+
+    fn delete_chat_locally(&mut self, chat_name: String) {
+        self.history.chats.remove(&chat_name);
+        self.history.unread_by_peer.remove(&chat_name);
+        if self.selected_chat == chat_name {
+            self.selected_chat.clear();
+        }
+        self.delete_chat_confirm = None;
+        self.save_history();
+        self.status = self.tf("status.chat_deleted", &[("user", &chat_name)]);
     }
 
     fn run_block_action(&mut self, auth: DeviceAuth, action: BlockAction) {
@@ -1325,6 +1346,9 @@ impl eframe::App for MessengerApp {
                 } else if ui.button(self.t("block.block_user")).clicked() {
                     self.block_selected_chat_user();
                 }
+                if ui.button(self.t("chat.delete_chat")).clicked() {
+                    self.request_delete_selected_chat();
+                }
             });
             if selected_blocked {
                 ui.label(self.t("block.you_blocked_banner"));
@@ -1404,6 +1428,9 @@ impl eframe::App for MessengerApp {
         }
         if self.create_account_open {
             self.render_create_account_window(ctx);
+        }
+        if self.delete_chat_confirm.is_some() {
+            self.render_delete_chat_window(ctx);
         }
     }
 }
@@ -1577,6 +1604,36 @@ impl MessengerApp {
                 }
             });
         self.create_account_open = open && self.create_account_open;
+    }
+
+    fn render_delete_chat_window(&mut self, ctx: &egui::Context) {
+        let Some(chat_name) = self.delete_chat_confirm.clone() else {
+            return;
+        };
+        let mut open = true;
+        egui::Window::new(self.t("chat.delete_chat"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(360.0)
+            .show(ctx, |ui| {
+                ui.label(self.tf("chat.delete_chat_confirm", &[("user", &chat_name)]));
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(self.t("chat.delete_chat_confirm_button"))
+                        .clicked()
+                    {
+                        self.delete_chat_locally(chat_name.clone());
+                    }
+                    if ui.button(self.t("common.cancel")).clicked() {
+                        self.delete_chat_confirm = None;
+                    }
+                });
+            });
+        if !open {
+            self.delete_chat_confirm = None;
+        }
     }
 
     fn local_safety_number(&self) -> Option<String> {
