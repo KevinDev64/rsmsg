@@ -1410,30 +1410,36 @@ impl eframe::App for MessengerApp {
 
             let composer_height = 128.0;
             let history_height = (ui.available_height() - composer_height).max(120.0);
-            egui::ScrollArea::vertical()
-                .stick_to_bottom(true)
-                .max_height(history_height)
-                .show(ui, |ui| {
-                    let mut save_index = None;
-                    let save_label = self.t("common.save");
-                    let you_label = self.t("message.you");
-                    if let Some(messages) = self.history.chats.get(&self.selected_chat) {
-                        for (index, m) in messages.iter().enumerate() {
-                            if render_message_bubble(
-                                ui,
-                                m,
-                                &self.selected_chat,
-                                &save_label,
-                                &you_label,
-                            ) {
-                                save_index = Some(index);
+            let mut save_index = None;
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), history_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::ScrollArea::vertical()
+                        .stick_to_bottom(true)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let save_label = self.t("common.save");
+                            let you_label = self.t("message.you");
+                            if let Some(messages) = self.history.chats.get(&self.selected_chat) {
+                                for (index, m) in messages.iter().enumerate() {
+                                    if render_message_bubble(
+                                        ui,
+                                        m,
+                                        &self.selected_chat,
+                                        &save_label,
+                                        &you_label,
+                                    ) {
+                                        save_index = Some(index);
+                                    }
+                                }
                             }
-                        }
-                    }
-                    if let Some(index) = save_index {
-                        self.save_file_message(index);
-                    }
-                });
+                        });
+                },
+            );
+            if let Some(index) = save_index {
+                self.save_file_message(index);
+            }
 
             ui.separator();
             let message_hint = self.t("chat.message_hint");
@@ -1461,6 +1467,8 @@ impl eframe::App for MessengerApp {
                 while self.message_input.ends_with(['\n', '\r']) {
                     self.message_input.pop();
                 }
+                #[cfg(target_os = "macos")]
+                response.surrender_focus();
                 self.send_current_message();
             }
             ui.horizontal(|ui| {
@@ -1471,6 +1479,8 @@ impl eframe::App for MessengerApp {
                     )
                     .clicked()
                 {
+                    #[cfg(target_os = "macos")]
+                    response.surrender_focus();
                     self.send_current_message();
                 }
                 if ui
