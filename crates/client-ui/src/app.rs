@@ -163,6 +163,7 @@ struct CallState {
     microphone_muted: bool,
     camera_disabled: bool,
     incoming: bool,
+    accepted: bool,
     signaling_status: String,
     last_signal_poll_at: Instant,
 }
@@ -806,8 +807,9 @@ impl MessengerApp {
         };
         match rx.try_recv() {
             Ok(result) => match result.result {
-                Ok(call) => {
+                Ok(mut call) => {
                     self.status = self.tf("call.started", &[("user", &call.peer)]);
+                    call.signaling_status = self.t("call.waiting_answer");
                     self.active_call = Some(call);
                 }
                 Err(err) => self.status = self.localize_status_error(&err),
@@ -824,18 +826,38 @@ impl MessengerApp {
             match rx.try_recv() {
                 Ok(result) => match result.result {
                     Ok(signals) => {
+                        let accepted_text = self.t("call.accepted");
+                        let declined_text = self.t("call.declined");
+                        let ended_text = self.t("call.ended");
+                        let mut close_status = None;
                         if let Some(call) = self.active_call.as_mut() {
                             for signal in signals {
-                                call.signaling_status = format!(
-                                    "signaling: {} at {}",
-                                    signal.kind, signal.created_at_unix_ms
-                                );
-                                if signal.kind == "hangup" {
-                                    self.status = self.t("call.ended");
-                                    self.active_call = None;
-                                    break;
+                                match signal.kind.as_str() {
+                                    "answer" => {
+                                        call.accepted = true;
+                                        call.signaling_status = accepted_text.clone();
+                                    }
+                                    "decline" => {
+                                        close_status = Some(declined_text.clone());
+                                        break;
+                                    }
+                                    "hangup" => {
+                                        close_status = Some(ended_text.clone());
+                                        break;
+                                    }
+                                    _ => {
+                                        call.signaling_status = format!(
+                                            "signaling: {} at {}",
+                                            signal.kind, signal.created_at_unix_ms
+                                        );
+                                    }
                                 }
                             }
+                        }
+                        if let Some(status) = close_status {
+                            self.status = status;
+                            self.active_call = None;
+                            self.call_signal_rx = None;
                         }
                     }
                     Err(err) => {
@@ -1379,7 +1401,8 @@ impl MessengerApp {
                 microphone_muted: false,
                 camera_disabled: false,
                 incoming: true,
-                signaling_status: self.t("call.signaling_ready"),
+                accepted: false,
+                signaling_status: self.t("call.incoming_waiting"),
                 last_signal_poll_at: Instant::now(),
             });
         }
@@ -1930,6 +1953,8 @@ impl MessengerApp {
 
     fn render_call_window(&mut self, ctx: &egui::Context) {
         let mut end_call = false;
+        let mut accept_call = false;
+        let mut decline_call = false;
         let title = self.t("call.window_title");
         let Some(call) = self.active_call.as_ref() else {
             return;
@@ -1939,6 +1964,7 @@ impl MessengerApp {
         let call_id = call.call_id.clone();
         let video = call.video;
         let incoming = call.incoming;
+        let accepted = call.accepted;
         let signaling_status = call.signaling_status.clone();
         let mut microphone_muted = call.microphone_muted;
         let mut camera_disabled = call.camera_disabled;
@@ -1957,6 +1983,8 @@ impl MessengerApp {
         let mute_label = self.t("call.mute_microphone");
         let enable_camera_label = self.t("call.enable_camera");
         let disable_camera_label = self.t("call.disable_camera");
+        let accept_label = self.t("call.accept");
+        let decline_label = self.t("call.decline");
         let hang_up_label = self.t("call.hang_up");
         egui::Window::new(title)
             .collapsible(false)
@@ -1970,13 +1998,27 @@ impl MessengerApp {
                 ui.label(note_label);
                 ui.label(signaling_status);
                 ui.separator();
+                if incoming && !accepted {
+                    ui.horizontal(|ui| {
+                        if ui.button(accept_label).clicked() {
+                            accept_call = true;
+                        }
+                        if ui.button(decline_label).clicked() {
+                            decline_call = true;
+                        }
+                    });
+                    ui.separator();
+                }
                 ui.horizontal(|ui| {
                     let mic_label = if microphone_muted {
                         unmute_label
                     } else {
                         mute_label
                     };
-                    if ui.button(mic_label).clicked() {
+                    if ui
+                        .add_enabled(accepted, egui::Button::new(mic_label))
+                        .clicked()
+                    {
                         microphone_muted = !microphone_muted;
                     }
                     let camera_label = if camera_disabled {
@@ -1985,7 +2027,7 @@ impl MessengerApp {
                         disable_camera_label
                     };
                     if ui
-                        .add_enabled(video, egui::Button::new(camera_label))
+                        .add_enabled(video && accepted, egui::Button::new(camera_label))
                         .clicked()
                     {
                         camera_disabled = !camera_disabled;
@@ -1995,7 +2037,43 @@ impl MessengerApp {
                     }
                 });
             });
-        if end_call {
+        if accept_call {
+            if let Some(auth) = self.auth.clone() {
+                let core = self.core.clone();
+                thread::spawn(move || {
+                    let rt = runtime();
+                    let _ = rt.block_on(core.send_call_signal(
+                        &auth,
+                        call_id,
+                        peer_device_uuid,
+                        "answer".to_string(),
+                        "{}".to_string(),
+                    ));
+                });
+            }
+            let accepted_text = self.t("call.accepted");
+            if let Some(call) = self.active_call.as_mut() {
+                call.accepted = true;
+                call.signaling_status = accepted_text;
+            }
+        } else if decline_call {
+            if let Some(auth) = self.auth.clone() {
+                let core = self.core.clone();
+                thread::spawn(move || {
+                    let rt = runtime();
+                    let _ = rt.block_on(core.send_call_signal(
+                        &auth,
+                        call_id,
+                        peer_device_uuid,
+                        "decline".to_string(),
+                        "{}".to_string(),
+                    ));
+                });
+            }
+            self.active_call = None;
+            self.call_signal_rx = None;
+            self.status = self.t("call.declined");
+        } else if end_call {
             if let Some(auth) = self.auth.clone() {
                 let core = self.core.clone();
                 thread::spawn(move || {
@@ -2212,6 +2290,7 @@ fn run_start_call_flow(
                 microphone_muted: false,
                 camera_disabled: false,
                 incoming: false,
+                accepted: false,
                 signaling_status: "signaling ready".to_string(),
                 last_signal_poll_at: Instant::now(),
             })
