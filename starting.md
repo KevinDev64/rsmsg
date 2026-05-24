@@ -6,6 +6,9 @@
 - Docker + Docker Compose
 - `sqlx-cli`
 
+Для Linux-сборок клиента с tray/уведомлениями могут понадобиться системные пакеты GTK/AppIndicator и D-Bus notification daemon.
+Названия пакетов зависят от дистрибутива, обычно это `libgtk-3-dev`, `libayatana-appindicator3-dev` или `libappindicator3-dev`.
+
 Установка `sqlx-cli`:
 
 ```bash
