@@ -33,6 +33,8 @@
   "call.incoming_waiting": "Incoming call. Accept or decline.",
   "call.incoming_video_message": "Incoming video call",
   "call.media_devices": "Call devices",
+  "call.media_active": "Microphone capture active",
+  "call.media_error": "Microphone capture failed: {error}",
   "call.microphone": "Microphone",
   "call.mute_microphone": "Mute microphone",
   "call.no_devices_found": "No devices found",

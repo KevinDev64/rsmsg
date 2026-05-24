@@ -33,6 +33,8 @@
   "call.incoming_waiting": "Входящий звонок. Примите или отклоните.",
   "call.incoming_video_message": "Входящий видеозвонок",
   "call.media_devices": "Устройства звонков",
+  "call.media_active": "Захват микрофона активен",
+  "call.media_error": "Не удалось включить микрофон: {error}",
   "call.microphone": "Микрофон",
   "call.mute_microphone": "Отключить микрофон",
   "call.no_devices_found": "Устройства не найдены",

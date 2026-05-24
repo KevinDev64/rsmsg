@@ -68,6 +68,8 @@ pub struct MessengerApp {
     active_call: Option<CallState>,
     microphone_devices: Vec<String>,
     camera_devices: Vec<String>,
+    media_session: Option<media::MediaSession>,
+    media_failed_call_id: Option<String>,
     last_sync_at: Instant,
 }
 
@@ -295,6 +297,8 @@ impl MessengerApp {
             active_call: None,
             microphone_devices: media::microphone_devices(),
             camera_devices: media::camera_devices(),
+            media_session: None,
+            media_failed_call_id: None,
             last_sync_at: Instant::now(),
         }
     }
@@ -309,6 +313,33 @@ impl MessengerApp {
             self.t("call.system_default")
         } else {
             value.to_string()
+        }
+    }
+
+    fn sync_media_session(&mut self) {
+        let Some(call) = self.active_call.as_ref() else {
+            self.media_session = None;
+            self.media_failed_call_id = None;
+            return;
+        };
+        if !call.accepted || call.microphone_muted {
+            self.media_session = None;
+            return;
+        }
+        if self.media_session.is_some()
+            || self.media_failed_call_id.as_deref() == Some(call.call_id.as_str())
+        {
+            return;
+        }
+        match media::start_microphone_capture(&self.settings.microphone) {
+            Ok(session) => self.media_session = Some(session),
+            Err(err) => {
+                let media_error = self.tf("call.media_error", &[("error", &err.to_string())]);
+                self.media_failed_call_id = Some(call.call_id.clone());
+                if let Some(call) = self.active_call.as_mut() {
+                    call.signaling_status = media_error;
+                }
+            }
         }
     }
 
@@ -1450,6 +1481,7 @@ impl eframe::App for MessengerApp {
         self.poll_trust_result();
         self.poll_call_result();
         self.poll_call_signals();
+        self.sync_media_session();
         ctx.request_repaint_after(Duration::from_millis(800));
         if self.auth.is_some() && self.last_sync_at.elapsed() >= Duration::from_secs(2) {
             self.sync_incoming();
@@ -2008,6 +2040,11 @@ impl MessengerApp {
         let incoming = call.incoming;
         let accepted = call.accepted;
         let signaling_status = call.signaling_status.clone();
+        let microphone_level = self
+            .media_session
+            .as_ref()
+            .map(media::MediaSession::microphone_level)
+            .unwrap_or_default();
         let mut microphone_muted = call.microphone_muted;
         let mut camera_disabled = call.camera_disabled;
         let active_label = if video {
@@ -2027,6 +2064,7 @@ impl MessengerApp {
         let disable_camera_label = self.t("call.disable_camera");
         let accept_label = self.t("call.accept");
         let decline_label = self.t("call.decline");
+        let media_active_label = self.t("call.media_active");
         let hang_up_label = self.t("call.hang_up");
         egui::Window::new(title)
             .collapsible(false)
@@ -2039,6 +2077,10 @@ impl MessengerApp {
                 ui.label(id_label);
                 ui.label(note_label);
                 ui.label(signaling_status);
+                if accepted && !microphone_muted {
+                    ui.label(media_active_label);
+                    ui.add(egui::ProgressBar::new(microphone_level).show_percentage());
+                }
                 ui.separator();
                 if incoming && !accepted {
                     ui.horizontal(|ui| {
@@ -2133,6 +2175,10 @@ impl MessengerApp {
             self.call_signal_rx = None;
             self.status = self.t("call.ended");
         } else if let Some(call) = self.active_call.as_mut() {
+            if call.microphone_muted != microphone_muted {
+                self.media_session = None;
+                self.media_failed_call_id = None;
+            }
             call.microphone_muted = microphone_muted;
             call.camera_disabled = camera_disabled;
         }
