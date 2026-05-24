@@ -4,15 +4,16 @@ use argon2::{
 };
 use axum::http::StatusCode;
 use shared::{
-    ResolveDeviceRequest, ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse,
-    UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserRegisterResponse,
-    UserSearchRequest, UserSearchResponse,
+    BlockUserRequest, BlockUserResponse, BlockedUsersResponse, ResolveDeviceRequest,
+    ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse, UnblockUserRequest,
+    UnblockUserResponse, UserLoginRequest, UserLoginResponse, UserRegisterRequest,
+    UserRegisterResponse, UserSearchRequest, UserSearchResponse,
 };
 use uuid::Uuid;
 
 use crate::{
     api_error::{ApiError, ApiResult},
-    repository::{devices, registration_invites, users},
+    repository::{devices, registration_invites, user_blocks, users},
 };
 
 const INVITE_CODE_PREFIX: &str = "RSMSG:";
@@ -185,4 +186,71 @@ pub async fn search_users(
         .await
         .map_err(|err| ApiError::database("user_search query failed", err))?;
     Ok(UserSearchResponse { users })
+}
+
+pub async fn block_user(
+    db: &sqlx::PgPool,
+    auth_device: Uuid,
+    payload: BlockUserRequest,
+) -> ApiResult<BlockUserResponse> {
+    let blocker = current_user_id(db, auth_device).await?;
+    let blocked = payload.user_id.trim().to_string();
+    validate_block_target(db, &blocker, &blocked).await?;
+    let blocked = user_blocks::block_user(db, blocker, blocked)
+        .await
+        .map_err(|err| ApiError::database("block_user insert failed", err))?;
+    Ok(BlockUserResponse { blocked })
+}
+
+pub async fn unblock_user(
+    db: &sqlx::PgPool,
+    auth_device: Uuid,
+    payload: UnblockUserRequest,
+) -> ApiResult<UnblockUserResponse> {
+    let blocker = current_user_id(db, auth_device).await?;
+    let target = payload.user_id.trim().to_string();
+    if target.is_empty() {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid user"));
+    }
+    let unblocked = user_blocks::unblock_user(db, blocker, target)
+        .await
+        .map_err(|err| ApiError::database("unblock_user delete failed", err))?;
+    Ok(UnblockUserResponse { unblocked })
+}
+
+pub async fn blocked_users(
+    db: &sqlx::PgPool,
+    auth_device: Uuid,
+) -> ApiResult<BlockedUsersResponse> {
+    let blocker = current_user_id(db, auth_device).await?;
+    let users = user_blocks::list_blocked_users(db, blocker)
+        .await
+        .map_err(|err| ApiError::database("blocked_users list failed", err))?;
+    Ok(BlockedUsersResponse { users })
+}
+
+async fn current_user_id(db: &sqlx::PgPool, auth_device: Uuid) -> ApiResult<String> {
+    devices::find_user_id_by_device_uuid(db, auth_device)
+        .await
+        .map_err(|err| ApiError::database("current user lookup failed", err))?
+        .ok_or(ApiError::new(StatusCode::UNAUTHORIZED, "invalid device"))
+}
+
+async fn validate_block_target(db: &sqlx::PgPool, blocker: &str, blocked: &str) -> ApiResult<()> {
+    if blocked.is_empty() {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid user"));
+    }
+    if blocker == blocked {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "cannot block yourself",
+        ));
+    }
+    let exists = users::user_exists(db, blocked.to_string())
+        .await
+        .map_err(|err| ApiError::database("block_user target lookup failed", err))?;
+    if !exists {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "user not found"));
+    }
+    Ok(())
 }

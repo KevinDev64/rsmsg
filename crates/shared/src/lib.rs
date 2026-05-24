@@ -222,3 +222,28 @@ pub struct UserSearchRequest {
 pub struct UserSearchResponse {
     pub users: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockUserRequest {
+    pub user_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockUserResponse {
+    pub blocked: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnblockUserRequest {
+    pub user_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnblockUserResponse {
+    pub unblocked: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockedUsersResponse {
+    pub users: Vec<String>,
+}

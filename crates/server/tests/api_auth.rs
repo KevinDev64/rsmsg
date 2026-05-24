@@ -33,6 +33,21 @@ async fn user_register_without_invite_code_is_rejected() {
 }
 
 #[tokio::test]
+async fn block_user_without_auth_returns_unauthorized() {
+    let app = test_app();
+    let body = r#"{"user_id":"bob"}"#;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/block_user")
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .expect("request");
+
+    let res = app.oneshot(req).await.expect("response");
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn send_message_without_auth_returns_unauthorized() {
     let app = test_app();
     let body = r#"{"message_id":"m1","from_device_uuid":"00000000-0000-0000-0000-000000000001","to_device_uuid":"00000000-0000-0000-0000-000000000002","envelope_b64":"AQ=="}"#;

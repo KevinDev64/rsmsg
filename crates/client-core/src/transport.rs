@@ -2,14 +2,15 @@ use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{HeaderMap, HeaderValue};
 use shared::{
-    AckMessageRequest, AppendBlobChunkRequest, AppendBlobChunkResponse, CreateBlobResponse,
-    DeviceLoginRequest, DeviceLoginResponse, DeviceLogoutRequest, DeviceLogoutResponse,
-    FetchBlobRequest, FetchPendingRequest, FetchPendingResponse, FetchPrekeyBundleRequest,
-    FetchPrekeyBundleResponse, MessageStatusRequest, MessageStatusResponse, RegisterDeviceRequest,
-    RegisterDeviceResponse, ResolveDeviceRequest, ResolveDeviceResponse, ResolveUserRequest,
-    ResolveUserResponse, SendMessageRequest, SendMessageResponse, UploadPrekeysRequest,
-    UploadPrekeysResponse, UserLoginRequest, UserLoginResponse, UserRegisterRequest,
-    UserRegisterResponse, UserSearchRequest, UserSearchResponse,
+    AckMessageRequest, AppendBlobChunkRequest, AppendBlobChunkResponse, BlockUserRequest,
+    BlockUserResponse, BlockedUsersResponse, CreateBlobResponse, DeviceLoginRequest,
+    DeviceLoginResponse, DeviceLogoutRequest, DeviceLogoutResponse, FetchBlobRequest,
+    FetchPendingRequest, FetchPendingResponse, FetchPrekeyBundleRequest, FetchPrekeyBundleResponse,
+    MessageStatusRequest, MessageStatusResponse, RegisterDeviceRequest, RegisterDeviceResponse,
+    ResolveDeviceRequest, ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse,
+    SendMessageRequest, SendMessageResponse, UnblockUserRequest, UnblockUserResponse,
+    UploadPrekeysRequest, UploadPrekeysResponse, UserLoginRequest, UserLoginResponse,
+    UserRegisterRequest, UserRegisterResponse, UserSearchRequest, UserSearchResponse,
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -143,7 +144,65 @@ impl ApiTransport {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("send_message failed with {status}: {body}"));
+            return Err(anyhow!(api_error_message(status, body)));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn block_user(
+        &self,
+        auth: &DeviceAuth,
+        user_id: String,
+    ) -> Result<BlockUserResponse> {
+        let url = format!("{}/v1/block_user", self.cfg.http_base);
+        let response = self
+            .client
+            .post(url)
+            .headers(self.auth_headers(auth)?)
+            .json(&BlockUserRequest { user_id })
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(api_error_message(status, body)));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn unblock_user(
+        &self,
+        auth: &DeviceAuth,
+        user_id: String,
+    ) -> Result<UnblockUserResponse> {
+        let url = format!("{}/v1/unblock_user", self.cfg.http_base);
+        let response = self
+            .client
+            .post(url)
+            .headers(self.auth_headers(auth)?)
+            .json(&UnblockUserRequest { user_id })
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(api_error_message(status, body)));
+        }
+        Ok(response.json().await?)
+    }
+
+    pub async fn blocked_users(&self, auth: &DeviceAuth) -> Result<BlockedUsersResponse> {
+        let url = format!("{}/v1/blocked_users", self.cfg.http_base);
+        let response = self
+            .client
+            .post(url)
+            .headers(self.auth_headers(auth)?)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(api_error_message(status, body)));
         }
         Ok(response.json().await?)
     }
@@ -367,4 +426,11 @@ impl ApiTransport {
         );
         Ok(headers)
     }
+}
+
+fn api_error_message(status: reqwest::StatusCode, body: String) -> String {
+    serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|value| value.get("error")?.as_str().map(ToString::to_string))
+        .unwrap_or_else(|| format!("request failed with {status}"))
 }

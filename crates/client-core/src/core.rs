@@ -158,6 +158,21 @@ impl ClientCore {
         Ok(response.users)
     }
 
+    pub async fn block_user(&self, auth: &DeviceAuth, user_id: String) -> Result<bool> {
+        let response = self.transport.block_user(auth, user_id).await?;
+        Ok(response.blocked)
+    }
+
+    pub async fn unblock_user(&self, auth: &DeviceAuth, user_id: String) -> Result<bool> {
+        let response = self.transport.unblock_user(auth, user_id).await?;
+        Ok(response.unblocked)
+    }
+
+    pub async fn blocked_users(&self, auth: &DeviceAuth) -> Result<Vec<String>> {
+        let response = self.transport.blocked_users(auth).await?;
+        Ok(response.users)
+    }
+
     pub async fn login_device(&self, user_id: String, device_id: String) -> Result<DeviceAuth> {
         let response = self
             .transport

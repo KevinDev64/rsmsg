@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     api_error::{ApiError, ApiResult},
-    repository::{devices, messages, prekeys},
+    repository::{devices, messages, prekeys, user_blocks},
     services::messages::drain_pending_messages,
 };
 
@@ -71,6 +71,33 @@ pub async fn send_message(
         return Err(ApiError::new(
             StatusCode::NOT_FOUND,
             "recipient device not found",
+        ));
+    }
+
+    let from_user = devices::find_user_id_by_device_uuid(db, from_device)
+        .await
+        .map_err(|err| ApiError::database("send_message sender user lookup failed", err))?
+        .ok_or(ApiError::new(StatusCode::FORBIDDEN, "device mismatch"))?;
+    let to_user = devices::find_user_id_by_device_uuid(db, to_device)
+        .await
+        .map_err(|err| ApiError::database("send_message recipient user lookup failed", err))?
+        .ok_or(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "recipient device not found",
+        ))?;
+    if let Some(blocker) = user_blocks::block_direction(db, from_user.clone(), to_user.clone())
+        .await
+        .map_err(|err| ApiError::database("send_message block lookup failed", err))?
+    {
+        if blocker == to_user {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "recipient blocked you",
+            ));
+        }
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "you blocked recipient",
         ));
     }
 

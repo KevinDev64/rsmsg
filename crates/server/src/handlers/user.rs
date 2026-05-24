@@ -1,14 +1,19 @@
-use axum::http::StatusCode;
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+};
 use shared::{
-    ResolveDeviceRequest, ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse,
-    UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserRegisterResponse,
-    UserSearchRequest, UserSearchResponse,
+    BlockUserRequest, BlockUserResponse, BlockedUsersResponse, ResolveDeviceRequest,
+    ResolveDeviceResponse, ResolveUserRequest, ResolveUserResponse, UnblockUserRequest,
+    UnblockUserResponse, UserLoginRequest, UserLoginResponse, UserRegisterRequest,
+    UserRegisterResponse, UserSearchRequest, UserSearchResponse,
 };
 
 use crate::{
     api_error::{ApiError, ApiResult},
     app_state::AppState,
+    auth::authorize_device,
     domain::user,
 };
 
@@ -60,4 +65,34 @@ pub async fn user_search(
     Json(payload): Json<UserSearchRequest>,
 ) -> ApiResult<Json<UserSearchResponse>> {
     Ok(Json(user::search_users(&state.db, payload).await?))
+}
+
+pub async fn block_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<BlockUserRequest>,
+) -> ApiResult<Json<BlockUserResponse>> {
+    let auth_device = authorize_device(&state.db, &headers).await?;
+    Ok(Json(
+        user::block_user(&state.db, auth_device, payload).await?,
+    ))
+}
+
+pub async fn unblock_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<UnblockUserRequest>,
+) -> ApiResult<Json<UnblockUserResponse>> {
+    let auth_device = authorize_device(&state.db, &headers).await?;
+    Ok(Json(
+        user::unblock_user(&state.db, auth_device, payload).await?,
+    ))
+}
+
+pub async fn blocked_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<BlockedUsersResponse>> {
+    let auth_device = authorize_device(&state.db, &headers).await?;
+    Ok(Json(user::blocked_users(&state.db, auth_device).await?))
 }

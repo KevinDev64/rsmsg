@@ -39,6 +39,14 @@ pub async fn get_password_hash(
         .await
 }
 
+pub async fn user_exists(db: &sqlx::PgPool, user_id: String) -> Result<bool, sqlx::Error> {
+    let found = sqlx::query_scalar::<_, i32>("SELECT 1 FROM users WHERE user_id = $1 LIMIT 1")
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?;
+    Ok(found == Some(1))
+}
+
 pub async fn search_users(db: &sqlx::PgPool, query: String) -> Result<Vec<String>, sqlx::Error> {
     let pattern = format!("{}%", query);
     sqlx::query_scalar::<_, String>(

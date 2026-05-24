@@ -43,12 +43,14 @@ pub struct MessengerApp {
     register_invite_code: String,
     peer_nickname_input: String,
     peer_search_results: Vec<String>,
+    blocked_users: Vec<String>,
     selected_chat: String,
     message_input: String,
     key_change_peer: Option<String>,
     login_rx: Option<Receiver<LoginResult>>,
     open_chat_rx: Option<Receiver<OpenChatResult>>,
     search_rx: Option<Receiver<SearchResult>>,
+    block_rx: Option<Receiver<BlockResult>>,
     send_rx: Option<Receiver<SendResult>>,
     sync_rx: Option<Receiver<SyncResult>>,
     read_ack_rx: Option<Receiver<ReadAckResult>>,
@@ -84,6 +86,17 @@ struct OpenChatSuccess {
 
 struct SearchResult {
     result: Result<Vec<String>, String>,
+}
+
+struct BlockResult {
+    action: BlockAction,
+    result: Result<Vec<String>, String>,
+}
+
+enum BlockAction {
+    List,
+    Block(String),
+    Unblock(String),
 }
 
 struct SendResult {
@@ -146,6 +159,18 @@ impl MessengerApp {
         error
             .replace("invite code already used", &self.t("error.invite_used"))
             .replace("nickname already exists", &self.t("error.nickname_exists"))
+            .replace(
+                "recipient blocked you",
+                &self.t("error.recipient_blocked_you"),
+            )
+            .replace(
+                "you blocked recipient",
+                &self.t("error.you_blocked_recipient"),
+            )
+    }
+
+    fn is_user_blocked(&self, user_id: &str) -> bool {
+        self.blocked_users.iter().any(|user| user == user_id)
     }
 
     fn language_label(&self, language: AppLanguage) -> String {
@@ -181,12 +206,14 @@ impl MessengerApp {
             register_invite_code: String::new(),
             peer_nickname_input: String::new(),
             peer_search_results: Vec::new(),
+            blocked_users: Vec::new(),
             selected_chat: String::new(),
             message_input: String::new(),
             key_change_peer: None,
             login_rx: None,
             open_chat_rx: None,
             search_rx: None,
+            block_rx: None,
             send_rx: None,
             sync_rx: None,
             read_ack_rx: None,
@@ -272,6 +299,7 @@ impl MessengerApp {
                     self.create_account_open = false;
                     self.register_password.clear();
                     self.register_invite_code.clear();
+                    self.refresh_blocked_users();
                     if self.settings.default_username.trim().is_empty() {
                         self.settings.default_username = self.nickname.clone();
                         self.settings.save();
@@ -306,6 +334,7 @@ impl MessengerApp {
         self.auth = None;
         self.local_keys = None;
         self.history = ChatHistory::load(None);
+        self.blocked_users.clear();
         self.password.clear();
         self.status = self.t("status.logged_out");
     }
@@ -428,6 +457,86 @@ impl MessengerApp {
         }
     }
 
+    fn refresh_blocked_users(&mut self) {
+        let Some(auth) = self.auth.clone() else {
+            return;
+        };
+        self.run_block_action(auth, BlockAction::List);
+    }
+
+    fn block_selected_chat_user(&mut self) {
+        let Some(auth) = self.auth.clone() else {
+            self.status = self.t("error.log_in_first");
+            return;
+        };
+        if self.selected_chat.is_empty() {
+            self.status = self.t("status.select_chat_first");
+            return;
+        }
+        self.run_block_action(auth, BlockAction::Block(self.selected_chat.clone()));
+    }
+
+    fn unblock_user(&mut self, user_id: String) {
+        let Some(auth) = self.auth.clone() else {
+            self.status = self.t("error.log_in_first");
+            return;
+        };
+        self.run_block_action(auth, BlockAction::Unblock(user_id));
+    }
+
+    fn run_block_action(&mut self, auth: DeviceAuth, action: BlockAction) {
+        if self.block_rx.is_some() {
+            return;
+        }
+        let core = self.core.clone();
+        let (tx, rx) = mpsc::channel();
+        self.block_rx = Some(rx);
+        thread::spawn(move || {
+            let rt = runtime();
+            let result = match &action {
+                BlockAction::List => rt
+                    .block_on(core.blocked_users(&auth))
+                    .map_err(|err| format!("Blocked users refresh failed: {err}")),
+                BlockAction::Block(user_id) => rt
+                    .block_on(core.block_user(&auth, user_id.clone()))
+                    .and_then(|_| rt.block_on(core.blocked_users(&auth)))
+                    .map_err(|err| format!("Block failed: {err}")),
+                BlockAction::Unblock(user_id) => rt
+                    .block_on(core.unblock_user(&auth, user_id.clone()))
+                    .and_then(|_| rt.block_on(core.blocked_users(&auth)))
+                    .map_err(|err| format!("Unblock failed: {err}")),
+            };
+            let _ = tx.send(BlockResult { action, result });
+        });
+    }
+
+    fn poll_block_result(&mut self) {
+        let Some(rx) = self.block_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(result) => match result.result {
+                Ok(users) => {
+                    self.blocked_users = users;
+                    match result.action {
+                        BlockAction::List => {}
+                        BlockAction::Block(user) => {
+                            self.status = self.tf("status.user_blocked", &[("user", &user)]);
+                        }
+                        BlockAction::Unblock(user) => {
+                            self.status = self.tf("status.user_unblocked", &[("user", &user)]);
+                        }
+                    }
+                }
+                Err(err) => self.status = self.localize_status_error(&err),
+            },
+            Err(mpsc::TryRecvError::Empty) => self.block_rx = Some(rx),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = self.t("status.block_worker_stopped");
+            }
+        }
+    }
+
     fn send_current_message(&mut self) {
         if self.send_rx.is_some() {
             return;
@@ -438,6 +547,10 @@ impl MessengerApp {
         };
         if self.selected_chat.is_empty() {
             self.status = self.t("status.select_chat_first");
+            return;
+        }
+        if self.is_user_blocked(&self.selected_chat) {
+            self.status = self.t("status.you_blocked_user");
             return;
         }
         let Some(peer_device_uuid) = self.selected_chat_session() else {
@@ -497,6 +610,10 @@ impl MessengerApp {
         };
         if self.selected_chat.is_empty() {
             self.status = self.t("status.select_chat_first");
+            return;
+        }
+        if self.is_user_blocked(&self.selected_chat) {
+            self.status = self.t("status.you_blocked_user");
             return;
         }
         let Some(peer_device_uuid) = self.selected_chat_session() else {
@@ -631,7 +748,7 @@ impl MessengerApp {
                             sent.message_index,
                             MessageStatus::Failed,
                         );
-                        self.status = err;
+                        self.status = self.localize_status_error(&err);
                     }
                 }
                 self.save_history();
@@ -1033,6 +1150,7 @@ impl eframe::App for MessengerApp {
         self.poll_login_result();
         self.poll_open_chat_result();
         self.poll_search_result();
+        self.poll_block_result();
         self.poll_send_result();
         self.poll_sync_result();
         self.poll_read_ack_result();
@@ -1195,7 +1313,22 @@ impl eframe::App for MessengerApp {
                 return;
             }
 
-            ui.heading(self.tf("chat.title", &[("peer", &self.selected_chat)]));
+            let selected_chat = self.selected_chat.clone();
+            let selected_blocked = self.is_user_blocked(&selected_chat);
+            ui.horizontal(|ui| {
+                ui.heading(self.tf("chat.title", &[("peer", &selected_chat)]));
+                ui.separator();
+                if selected_blocked {
+                    if ui.button(self.t("block.unblock_user")).clicked() {
+                        self.unblock_user(selected_chat.clone());
+                    }
+                } else if ui.button(self.t("block.block_user")).clicked() {
+                    self.block_selected_chat_user();
+                }
+            });
+            if selected_blocked {
+                ui.label(self.t("block.you_blocked_banner"));
+            }
             ui.separator();
 
             let composer_height = 96.0;
@@ -1380,6 +1513,26 @@ impl MessengerApp {
                         self.logout();
                         self.apply_server_config();
                     }
+                }
+
+                ui.separator();
+                ui.heading(self.t("privacy.title"));
+                ui.label(self.t("privacy.blocked_users"));
+                if self.blocked_users.is_empty() {
+                    ui.label(self.t("privacy.no_blocked_users"));
+                } else {
+                    let blocked_users = self.blocked_users.clone();
+                    for user in blocked_users {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("@{user}"));
+                            if ui.button(self.t("block.unblock_user")).clicked() {
+                                self.unblock_user(user.clone());
+                            }
+                        });
+                    }
+                }
+                if ui.button(self.t("privacy.refresh_blocked_users")).clicked() {
+                    self.refresh_blocked_users();
                 }
 
                 ui.separator();
