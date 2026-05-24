@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
         .init();
 
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
-    let bind_addr = std::env::var("SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+    let bind_addr = bind_addr()?;
 
     let db = PgPoolOptions::new()
         .max_connections(10)
@@ -32,4 +32,14 @@ async fn main() -> Result<()> {
     tracing::info!(%bind_addr, "server listening");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+fn bind_addr() -> Result<String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "-ip" {
+            return args.next().context("-ip requires an address");
+        }
+    }
+    Ok(std::env::var("SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string()))
 }

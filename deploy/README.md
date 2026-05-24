@@ -25,3 +25,9 @@ sqlx migrate run --source crates/server/migrations
 ```bash
 cargo run -p server
 ```
+
+To bind all interfaces:
+
+```bash
+cargo run -p server -- -ip 0.0.0.0:3000
+```
