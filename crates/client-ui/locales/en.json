@@ -93,7 +93,6 @@
   "status.user_blocked": "Blocked @{user}",
   "status.user_unblocked": "Unblocked @{user}",
   "status.you_blocked_user": "You blocked this user. Unblock them to send messages.",
-  "tray.hide_to_tray": "Hide to tray",
   "welcome.step_1": "1) Enter your nickname",
   "welcome.step_2": "2) Press Login or create account with invite code",
   "welcome.step_3": "3) Open chat by peer nickname",

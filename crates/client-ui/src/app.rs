@@ -1240,12 +1240,6 @@ impl eframe::App for MessengerApp {
                 ui.heading(self.t("app.title"));
                 ui.separator();
                 ui.label(&self.status);
-                if self.tray.is_some() {
-                    ui.separator();
-                    if ui.button(self.t("tray.hide_to_tray")).clicked() {
-                        self.hide_to_tray(ctx);
-                    }
-                }
                 if let Some(peer) = &self.key_change_peer {
                     ui.separator();
                     ui.label(self.tf("security.key_changed", &[("peer", peer)]));
@@ -1443,10 +1437,19 @@ impl eframe::App for MessengerApp {
 
             ui.separator();
             let message_hint = self.t("chat.message_hint");
-            let response = ui.add_sized(
-                [ui.available_width(), 56.0],
-                egui::TextEdit::multiline(&mut self.message_input).hint_text(message_hint),
-            );
+            let response = egui::ScrollArea::vertical()
+                .id_salt("message_composer_scroll")
+                .max_height(84.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.add_sized(
+                        [ui.available_width(), 84.0],
+                        egui::TextEdit::multiline(&mut self.message_input)
+                            .desired_rows(4)
+                            .hint_text(message_hint),
+                    )
+                })
+                .inner;
             let send_by_enter = response.has_focus()
                 && ui.input(|input| {
                     input.key_pressed(egui::Key::Enter)
