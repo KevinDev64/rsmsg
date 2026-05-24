@@ -65,10 +65,12 @@ pub struct MessengerApp {
     trust_rx: Option<Receiver<TrustResult>>,
     call_rx: Option<Receiver<CallResult>>,
     call_signal_rx: Option<Receiver<CallSignalResult>>,
+    webrtc_rx: Option<Receiver<WebRtcResult>>,
     active_call: Option<CallState>,
     microphone_devices: Vec<String>,
     camera_devices: Vec<String>,
     media_session: Option<media::MediaSession>,
+    webrtc_session: Option<media::WebRtcSession>,
     media_failed_call_id: Option<String>,
     last_sync_at: Instant,
 }
@@ -175,6 +177,16 @@ struct CallState {
 
 struct CallSignalResult {
     result: Result<Vec<CallSignalItem>, String>,
+}
+
+enum WebRtcAction {
+    LocalOffer { offer_payload: String },
+    LocalAnswer { answer_payload: String },
+    RemoteAnswerApplied,
+}
+
+struct WebRtcResult {
+    result: Result<(media::WebRtcSession, WebRtcAction), String>,
 }
 
 impl MessengerApp {
@@ -294,10 +306,12 @@ impl MessengerApp {
             trust_rx: None,
             call_rx: None,
             call_signal_rx: None,
+            webrtc_rx: None,
             active_call: None,
             microphone_devices: media::microphone_devices(),
             camera_devices: media::camera_devices(),
             media_session: None,
+            webrtc_session: None,
             media_failed_call_id: None,
             last_sync_at: Instant::now(),
         }
@@ -879,13 +893,19 @@ impl MessengerApp {
                         let declined_text = self.t("call.declined");
                         let ended_text = self.t("call.ended");
                         let mut close_status = None;
+                        let mut start_offer = false;
+                        let mut remote_offer = None;
+                        let mut remote_answer = None;
                         if let Some(call) = self.active_call.as_mut() {
                             for signal in signals {
                                 match signal.kind.as_str() {
                                     "answer" => {
                                         call.accepted = true;
                                         call.signaling_status = accepted_text.clone();
+                                        start_offer = true;
                                     }
+                                    "webrtc-offer" => remote_offer = Some(signal.payload),
+                                    "webrtc-answer" => remote_answer = Some(signal.payload),
                                     "decline" => {
                                         close_status = Some(declined_text.clone());
                                         break;
@@ -903,10 +923,20 @@ impl MessengerApp {
                                 }
                             }
                         }
+                        if start_offer {
+                            self.start_webrtc_offer();
+                        }
+                        if let Some(payload) = remote_offer {
+                            self.start_webrtc_answer(payload);
+                        }
+                        if let Some(payload) = remote_answer {
+                            self.apply_webrtc_answer(payload);
+                        }
                         if let Some(status) = close_status {
                             self.status = status;
                             self.active_call = None;
                             self.call_signal_rx = None;
+                            self.stop_webrtc_session();
                         }
                     }
                     Err(err) => {
@@ -943,6 +973,131 @@ impl MessengerApp {
                 .map_err(|err| format!("Call signaling failed: {err}"));
             let _ = tx.send(CallSignalResult { result });
         });
+    }
+
+    fn start_webrtc_offer(&mut self) {
+        if self.webrtc_session.is_some() || self.webrtc_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.webrtc_rx = Some(rx);
+        thread::spawn(move || {
+            let rt = runtime();
+            let result = rt
+                .block_on(media::WebRtcSession::create_offer())
+                .map(|(session, offer_payload)| {
+                    (session, WebRtcAction::LocalOffer { offer_payload })
+                })
+                .map_err(|err| format!("WebRTC offer failed: {err}"));
+            let _ = tx.send(WebRtcResult { result });
+        });
+    }
+
+    fn start_webrtc_answer(&mut self, offer_payload: String) {
+        if self.webrtc_session.is_some() || self.webrtc_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.webrtc_rx = Some(rx);
+        thread::spawn(move || {
+            let rt = runtime();
+            let result = rt
+                .block_on(media::WebRtcSession::create_answer(&offer_payload))
+                .map(|(session, answer_payload)| {
+                    (session, WebRtcAction::LocalAnswer { answer_payload })
+                })
+                .map_err(|err| format!("WebRTC answer failed: {err}"));
+            let _ = tx.send(WebRtcResult { result });
+        });
+    }
+
+    fn apply_webrtc_answer(&mut self, answer_payload: String) {
+        if self.webrtc_rx.is_some() {
+            return;
+        }
+        let Some(session) = self.webrtc_session.take() else {
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        self.webrtc_rx = Some(rx);
+        thread::spawn(move || {
+            let rt = runtime();
+            let result = rt
+                .block_on(session.apply_answer(&answer_payload))
+                .map(|_| (session, WebRtcAction::RemoteAnswerApplied))
+                .map_err(|err| format!("WebRTC answer apply failed: {err}"));
+            let _ = tx.send(WebRtcResult { result });
+        });
+    }
+
+    fn poll_webrtc_result(&mut self) {
+        let Some(rx) = self.webrtc_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(result) => match result.result {
+                Ok((session, action)) => {
+                    self.webrtc_session = Some(session);
+                    match action {
+                        WebRtcAction::LocalOffer { offer_payload } => {
+                            let status = self.t("call.webrtc_offer_sent");
+                            self.send_webrtc_signal("webrtc-offer", offer_payload);
+                            if let Some(call) = self.active_call.as_mut() {
+                                call.signaling_status = status;
+                            }
+                        }
+                        WebRtcAction::LocalAnswer { answer_payload } => {
+                            let status = self.t("call.webrtc_answer_sent");
+                            self.send_webrtc_signal("webrtc-answer", answer_payload);
+                            if let Some(call) = self.active_call.as_mut() {
+                                call.signaling_status = status;
+                            }
+                        }
+                        WebRtcAction::RemoteAnswerApplied => {
+                            let status = self.t("call.webrtc_connecting");
+                            if let Some(call) = self.active_call.as_mut() {
+                                call.signaling_status = status;
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    if let Some(call) = self.active_call.as_mut() {
+                        call.signaling_status = err;
+                    }
+                }
+            },
+            Err(mpsc::TryRecvError::Empty) => self.webrtc_rx = Some(rx),
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    fn send_webrtc_signal(&mut self, kind: &str, payload: String) {
+        let Some(auth) = self.auth.clone() else {
+            return;
+        };
+        let Some(call) = self.active_call.as_ref() else {
+            return;
+        };
+        let core = self.core.clone();
+        let call_id = call.call_id.clone();
+        let peer_device_uuid = call.peer_device_uuid.clone();
+        let kind = kind.to_string();
+        thread::spawn(move || {
+            let rt = runtime();
+            let _ =
+                rt.block_on(core.send_call_signal(&auth, call_id, peer_device_uuid, kind, payload));
+        });
+    }
+
+    fn stop_webrtc_session(&mut self) {
+        self.webrtc_rx = None;
+        if let Some(session) = self.webrtc_session.take() {
+            thread::spawn(move || {
+                let rt = runtime();
+                rt.block_on(session.close());
+            });
+        }
     }
 
     fn save_file_message(&mut self, index: usize) {
@@ -1481,6 +1636,7 @@ impl eframe::App for MessengerApp {
         self.poll_trust_result();
         self.poll_call_result();
         self.poll_call_signals();
+        self.poll_webrtc_result();
         self.sync_media_session();
         ctx.request_repaint_after(Duration::from_millis(800));
         if self.auth.is_some() && self.last_sync_at.elapsed() >= Duration::from_secs(2) {
@@ -2045,6 +2201,10 @@ impl MessengerApp {
             .as_ref()
             .map(media::MediaSession::microphone_level)
             .unwrap_or_default();
+        let webrtc_status = self
+            .webrtc_session
+            .as_ref()
+            .map(media::WebRtcSession::status);
         let mut microphone_muted = call.microphone_muted;
         let mut camera_disabled = call.camera_disabled;
         let active_label = if video {
@@ -2077,6 +2237,9 @@ impl MessengerApp {
                 ui.label(id_label);
                 ui.label(note_label);
                 ui.label(signaling_status);
+                if let Some(status) = webrtc_status {
+                    ui.label(status);
+                }
                 if accepted && !microphone_muted {
                     ui.label(media_active_label);
                     ui.add(egui::ProgressBar::new(microphone_level).show_percentage());
@@ -2156,6 +2319,7 @@ impl MessengerApp {
             }
             self.active_call = None;
             self.call_signal_rx = None;
+            self.stop_webrtc_session();
             self.status = self.t("call.declined");
         } else if end_call {
             if let Some(auth) = self.auth.clone() {
@@ -2173,6 +2337,7 @@ impl MessengerApp {
             }
             self.active_call = None;
             self.call_signal_rx = None;
+            self.stop_webrtc_session();
             self.status = self.t("call.ended");
         } else if let Some(call) = self.active_call.as_mut() {
             if call.microphone_muted != microphone_muted {

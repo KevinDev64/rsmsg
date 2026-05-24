@@ -21,3 +21,4 @@ base64.workspace = true
 tokio.workspace = true
 tray-icon.workspace = true
 uuid.workspace = true
+webrtc.workspace = true

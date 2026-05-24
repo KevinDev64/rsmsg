@@ -1,10 +1,17 @@
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicU32, Ordering},
 };
 
 use anyhow::{Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use webrtc::{
+    api::APIBuilder,
+    peer_connection::{
+        RTCPeerConnection, configuration::RTCConfiguration,
+        sdp::session_description::RTCSessionDescription,
+    },
+};
 
 pub const SYSTEM_DEFAULT_DEVICE: &str = "System default";
 
@@ -32,9 +39,103 @@ pub struct MediaSession {
     level: Arc<AtomicU32>,
 }
 
+pub struct WebRtcSession {
+    peer_connection: Arc<RTCPeerConnection>,
+    status: Arc<Mutex<String>>,
+}
+
 impl MediaSession {
     pub fn microphone_level(&self) -> f32 {
         self.level.load(Ordering::Relaxed) as f32 / 1000.0
+    }
+}
+
+impl WebRtcSession {
+    pub fn status(&self) -> String {
+        self.status.lock().expect("webrtc_status").clone()
+    }
+
+    pub async fn close(&self) {
+        let _ = self.peer_connection.close().await;
+    }
+
+    pub async fn create_offer() -> Result<(Self, String)> {
+        let session = Self::new(true).await?;
+        let offer = session.peer_connection.create_offer(None).await?;
+        let mut gather_complete = session.peer_connection.gathering_complete_promise().await;
+        session.peer_connection.set_local_description(offer).await?;
+        let _ = gather_complete.recv().await;
+        let local = session
+            .peer_connection
+            .local_description()
+            .await
+            .ok_or_else(|| anyhow!("missing local WebRTC offer"))?;
+        Ok((session, serde_json::to_string(&local)?))
+    }
+
+    pub async fn create_answer(offer_payload: &str) -> Result<(Self, String)> {
+        let session = Self::new(false).await?;
+        let offer = serde_json::from_str::<RTCSessionDescription>(offer_payload)?;
+        session
+            .peer_connection
+            .set_remote_description(offer)
+            .await?;
+        let answer = session.peer_connection.create_answer(None).await?;
+        let mut gather_complete = session.peer_connection.gathering_complete_promise().await;
+        session
+            .peer_connection
+            .set_local_description(answer)
+            .await?;
+        let _ = gather_complete.recv().await;
+        let local = session
+            .peer_connection
+            .local_description()
+            .await
+            .ok_or_else(|| anyhow!("missing local WebRTC answer"))?;
+        Ok((session, serde_json::to_string(&local)?))
+    }
+
+    pub async fn apply_answer(&self, answer_payload: &str) -> Result<()> {
+        let answer = serde_json::from_str::<RTCSessionDescription>(answer_payload)?;
+        self.peer_connection.set_remote_description(answer).await?;
+        Ok(())
+    }
+
+    async fn new(create_data_channel: bool) -> Result<Self> {
+        let api = APIBuilder::new().build();
+        let peer_connection = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await?);
+        let status = Arc::new(Mutex::new("WebRTC starting".to_string()));
+        let status_for_state = status.clone();
+        peer_connection.on_peer_connection_state_change(Box::new(move |state| {
+            *status_for_state.lock().expect("webrtc_status") = format!("WebRTC {state}");
+            Box::pin(async {})
+        }));
+        if create_data_channel {
+            let channel = peer_connection
+                .create_data_channel("rsmsg-call", None)
+                .await?;
+            let status_for_channel = status.clone();
+            channel.on_open(Box::new(move || {
+                *status_for_channel.lock().expect("webrtc_status") =
+                    "WebRTC data channel open".to_string();
+                Box::pin(async {})
+            }));
+        } else {
+            let status_for_channel = status.clone();
+            peer_connection.on_data_channel(Box::new(move |channel| {
+                let status_for_open = status_for_channel.clone();
+                channel.on_open(Box::new(move || {
+                    *status_for_open.lock().expect("webrtc_status") =
+                        "WebRTC data channel open".to_string();
+                    Box::pin(async {})
+                }));
+                Box::pin(async {})
+            }));
+        }
+        Ok(Self {
+            peer_connection,
+            status,
+        })
     }
 }
 
