@@ -31,6 +31,7 @@ rand = "0.8"
 notify-rust = "4"
 nokhwa = { version = "0.10", default-features = false, features = ["decoding", "input-native"] }
 opus = "0.3"
+openh264 = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }

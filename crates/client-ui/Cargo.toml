@@ -14,6 +14,7 @@ egui.workspace = true
 notify-rust.workspace = true
 nokhwa.workspace = true
 opus.workspace = true
+openh264.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

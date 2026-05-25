@@ -18,9 +18,17 @@ use nokhwa::{
     query,
     utils::{CameraIndex, RequestedFormat, RequestedFormatType},
 };
+use openh264::{
+    decoder::Decoder as H264Decoder,
+    encoder::Encoder as H264Encoder,
+    formats::{RgbSliceU8, YUVBuffer, YUVSource},
+};
 use opus::{Application, Channels, Decoder, Encoder};
 use webrtc::{
-    api::{APIBuilder, media_engine::MIME_TYPE_OPUS},
+    api::{
+        APIBuilder,
+        media_engine::{MIME_TYPE_H264, MIME_TYPE_OPUS},
+    },
     data_channel::{RTCDataChannel, data_channel_message::DataChannelMessage},
     ice_transport::ice_server::RTCIceServer,
     peer_connection::{
@@ -41,6 +49,8 @@ const PLAYBACK_BUFFER_MAX: usize = AUDIO_SAMPLE_RATE * 2;
 const OPUS_SAMPLE_RATE: u32 = 48_000;
 const OPUS_FRAME_SAMPLES: usize = 960;
 const OPUS_MAX_PACKET_BYTES: usize = 1275;
+const VIDEO_CLOCK_RATE: u32 = 90_000;
+const VIDEO_FRAME_DURATION: Duration = Duration::from_millis(200);
 
 #[derive(Clone)]
 pub struct IceConfig {
@@ -136,6 +146,7 @@ pub struct WebRtcSession {
     playback_queue: Arc<Mutex<VecDeque<f32>>>,
     remote_video: Arc<Mutex<Option<VideoFrameInfo>>>,
     _audio_track: Arc<TrackLocalStaticSample>,
+    _video_track: Arc<TrackLocalStaticSample>,
 }
 
 impl MediaSession {
@@ -252,10 +263,23 @@ impl WebRtcSession {
             "rsmsg-audio".to_string(),
             "rsmsg-call".to_string(),
         ));
+        let video_track = Arc::new(TrackLocalStaticSample::new(
+            RTCRtpCodecCapability {
+                mime_type: MIME_TYPE_H264.to_string(),
+                clock_rate: VIDEO_CLOCK_RATE,
+                ..Default::default()
+            },
+            "rsmsg-video".to_string(),
+            "rsmsg-call".to_string(),
+        ));
         let rtp_sender = peer_connection
             .add_track(audio_track.clone() as Arc<dyn TrackLocal + Send + Sync>)
             .await?;
         tokio::spawn(async move { while rtp_sender.read_rtcp().await.is_ok() {} });
+        let video_rtp_sender = peer_connection
+            .add_track(video_track.clone() as Arc<dyn TrackLocal + Send + Sync>)
+            .await?;
+        tokio::spawn(async move { while video_rtp_sender.read_rtcp().await.is_ok() {} });
         let (outbound_audio_tx, outbound_audio_rx) = mpsc::channel::<Vec<u8>>();
         let (outbound_video_tx, outbound_video_rx) = mpsc::channel::<VideoFrameInfo>();
         let audio_track_for_sender = audio_track.clone();
@@ -296,12 +320,46 @@ impl WebRtcSession {
             }
         });
         let data_channel_for_video = data_channel.clone();
+        let video_track_for_sender = video_track.clone();
         let status_for_video = status.clone();
         thread::spawn(move || {
             let Ok(rt) = tokio::runtime::Runtime::new() else {
                 return;
             };
+            let mut encoder = match H264Encoder::new() {
+                Ok(encoder) => Some(encoder),
+                Err(err) => {
+                    *status_for_video.lock().expect("webrtc_status") =
+                        format!("H264 encoder failed: {err}");
+                    None
+                }
+            };
             while let Ok(frame) = outbound_video_rx.recv() {
+                if let Some(encoder) = encoder.as_mut() {
+                    let rgb =
+                        RgbSliceU8::new(&frame.rgb, (frame.width as usize, frame.height as usize));
+                    let yuv = YUVBuffer::from_rgb8_source(rgb);
+                    match encoder.encode(&yuv) {
+                        Ok(bitstream) => {
+                            let sample = Sample {
+                                data: Bytes::from(bitstream.to_vec()),
+                                duration: VIDEO_FRAME_DURATION,
+                                ..Default::default()
+                            };
+                            if rt
+                                .block_on(video_track_for_sender.write_sample(&sample))
+                                .is_err()
+                            {
+                                *status_for_video.lock().expect("webrtc_status") =
+                                    "WebRTC video track send failed".to_string();
+                            }
+                        }
+                        Err(err) => {
+                            *status_for_video.lock().expect("webrtc_status") =
+                                format!("H264 encode failed: {err}");
+                        }
+                    }
+                }
                 let channel = data_channel_for_video
                     .lock()
                     .expect("webrtc_data_channel")
@@ -320,12 +378,55 @@ impl WebRtcSession {
         let playback_queue_for_track = playback_queue.clone();
         let status_for_track = status.clone();
         let remote_audio_level_for_track = remote_audio_level.clone();
+        let remote_video_for_track = remote_video.clone();
         peer_connection.on_track(Box::new(move |track, _, _| {
             let playback_queue = playback_queue_for_track.clone();
             let status = status_for_track.clone();
             let remote_audio_level = remote_audio_level_for_track.clone();
+            let remote_video = remote_video_for_track.clone();
             Box::pin(async move {
-                if track.codec().capability.mime_type != MIME_TYPE_OPUS {
+                let mime_type = track.codec().capability.mime_type;
+                if mime_type.eq_ignore_ascii_case(MIME_TYPE_H264) {
+                    *status.lock().expect("webrtc_status") =
+                        "WebRTC video track receiving".to_string();
+                    let mut builder = webrtc_media::io::sample_builder::SampleBuilder::new(
+                        16,
+                        webrtc::rtp::codecs::h264::H264Packet::default(),
+                        VIDEO_CLOCK_RATE,
+                    );
+                    let Ok(mut decoder) = H264Decoder::new() else {
+                        *status.lock().expect("webrtc_status") = "H264 decoder failed".to_string();
+                        return;
+                    };
+                    let mut frames = 0_u64;
+                    while let Ok((packet, _)) = track.read_rtp().await {
+                        builder.push(packet);
+                        while let Some(sample) = builder.pop() {
+                            match decoder.decode(&sample.data) {
+                                Ok(Some(decoded)) => {
+                                    let (width, height) = decoded.dimensions();
+                                    let mut rgb = vec![0_u8; decoded.rgb8_len()];
+                                    decoded.write_rgb8(&mut rgb);
+                                    frames = frames.saturating_add(1);
+                                    *remote_video.lock().expect("remote_video") =
+                                        Some(VideoFrameInfo {
+                                            width: width as u32,
+                                            height: height as u32,
+                                            frames,
+                                            rgb,
+                                        });
+                                }
+                                Ok(None) => {}
+                                Err(err) => {
+                                    *status.lock().expect("webrtc_status") =
+                                        format!("H264 decode failed: {err}");
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+                if !mime_type.eq_ignore_ascii_case(MIME_TYPE_OPUS) {
                     return;
                 }
                 let Ok(mut decoder) = Decoder::new(OPUS_SAMPLE_RATE, Channels::Mono) else {
@@ -409,6 +510,7 @@ impl WebRtcSession {
             playback_queue,
             remote_video,
             _audio_track: audio_track,
+            _video_track: video_track,
         })
     }
 }
@@ -572,9 +674,10 @@ fn run_camera_capture(
 }
 
 fn preview_rgb(width: u32, height: u32, rgb: &[u8]) -> (u32, u32, Vec<u8>) {
-    let target_width = width.min(320).max(1);
+    let target_width = even_dimension(width.min(320));
     let target_height =
         ((height.max(1) as u64 * target_width as u64) / width.max(1) as u64).max(1) as u32;
+    let target_height = even_dimension(target_height);
     if target_width == width && target_height == height {
         return (width, height, rgb.to_vec());
     }
@@ -591,6 +694,10 @@ fn preview_rgb(width: u32, height: u32, rgb: &[u8]) -> (u32, u32, Vec<u8>) {
         }
     }
     (target_width, target_height, out)
+}
+
+fn even_dimension(value: u32) -> u32 {
+    value.clamp(2, u32::MAX) & !1
 }
 
 fn build_input_stream<T>(
