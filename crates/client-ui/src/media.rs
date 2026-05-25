@@ -129,6 +129,7 @@ pub struct VideoCaptureSession {
 pub struct WebRtcSession {
     peer_connection: Arc<RTCPeerConnection>,
     status: Arc<Mutex<String>>,
+    remote_audio_level: Arc<AtomicU32>,
     _data_channel: Arc<Mutex<Option<Arc<RTCDataChannel>>>>,
     outbound_audio_tx: mpsc::Sender<Vec<u8>>,
     outbound_video_tx: mpsc::Sender<VideoFrameInfo>,
@@ -184,6 +185,10 @@ impl WebRtcSession {
         self.remote_video.lock().expect("remote_video").clone()
     }
 
+    pub fn remote_audio_level(&self) -> f32 {
+        self.remote_audio_level.load(Ordering::Relaxed) as f32 / 1000.0
+    }
+
     pub async fn create_offer(ice_config: IceConfig) -> Result<(Self, String)> {
         let session = Self::new(true, ice_config).await?;
         let offer = session.peer_connection.create_offer(None).await?;
@@ -236,6 +241,7 @@ impl WebRtcSession {
         let data_channel: Arc<Mutex<Option<Arc<RTCDataChannel>>>> = Arc::new(Mutex::new(None));
         let playback_queue = Arc::new(Mutex::new(VecDeque::<f32>::new()));
         let remote_video = Arc::new(Mutex::new(None));
+        let remote_audio_level = Arc::new(AtomicU32::new(0));
         let audio_track = Arc::new(TrackLocalStaticSample::new(
             RTCRtpCodecCapability {
                 mime_type: MIME_TYPE_OPUS.to_string(),
@@ -313,9 +319,11 @@ impl WebRtcSession {
         });
         let playback_queue_for_track = playback_queue.clone();
         let status_for_track = status.clone();
+        let remote_audio_level_for_track = remote_audio_level.clone();
         peer_connection.on_track(Box::new(move |track, _, _| {
             let playback_queue = playback_queue_for_track.clone();
             let status = status_for_track.clone();
+            let remote_audio_level = remote_audio_level_for_track.clone();
             Box::pin(async move {
                 if track.codec().capability.mime_type != MIME_TYPE_OPUS {
                     return;
@@ -332,6 +340,12 @@ impl WebRtcSession {
                         continue;
                     };
                     let mut queue = playback_queue.lock().expect("audio_playback_queue");
+                    let peak = output[..samples]
+                        .iter()
+                        .map(|sample| sample.abs())
+                        .fold(0.0_f32, f32::max)
+                        .clamp(0.0, 1.0);
+                    remote_audio_level.store((peak * 1000.0) as u32, Ordering::Relaxed);
                     queue.extend(output[..samples].iter().copied());
                     while queue.len() > PLAYBACK_BUFFER_MAX {
                         queue.pop_front();
@@ -388,6 +402,7 @@ impl WebRtcSession {
         Ok(Self {
             peer_connection,
             status,
+            remote_audio_level,
             _data_channel: data_channel,
             outbound_audio_tx,
             outbound_video_tx,

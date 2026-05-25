@@ -2378,6 +2378,11 @@ impl MessengerApp {
             .as_ref()
             .map(media::MediaSession::microphone_level)
             .unwrap_or_default();
+        let remote_audio_level = self
+            .webrtc_session
+            .as_ref()
+            .map(media::WebRtcSession::remote_audio_level)
+            .unwrap_or_default();
         let webrtc_status = self
             .webrtc_session
             .as_ref()
@@ -2425,6 +2430,8 @@ impl MessengerApp {
         let accept_label = self.t("call.accept");
         let decline_label = self.t("call.decline");
         let media_active_label = self.t("call.media_active");
+        let local_speaking_label = self.t("call.local_speaking");
+        let remote_speaking_label = self.t("call.remote_speaking");
         let hang_up_label = self.t("call.hang_up");
         egui::Window::new(title)
             .collapsible(false)
@@ -2496,6 +2503,12 @@ impl MessengerApp {
                 if accepted && !microphone_muted {
                     ui.label(media_active_label);
                     ui.add(egui::ProgressBar::new(microphone_level).show_percentage());
+                    if microphone_level > 0.05 {
+                        ui.label(local_speaking_label);
+                    }
+                }
+                if accepted && remote_audio_level > 0.03 {
+                    ui.label(remote_speaking_label);
                 }
                 ui.separator();
                 if incoming && !accepted {
