@@ -352,6 +352,13 @@ impl MessengerApp {
         }
     }
 
+    fn audio_processing_config(&self) -> media::AudioProcessingConfig {
+        media::AudioProcessingConfig {
+            noise_suppression: self.settings.noise_suppression,
+            automatic_gain_control: self.settings.automatic_gain_control,
+        }
+    }
+
     fn sync_media_session(&mut self) {
         let Some(call) = self.active_call.as_ref() else {
             self.media_session = None;
@@ -371,7 +378,11 @@ impl MessengerApp {
             .webrtc_session
             .as_ref()
             .map(media::WebRtcSession::audio_sender);
-        match media::start_microphone_capture_with_sender(&self.settings.microphone, audio_tx) {
+        match media::start_microphone_capture_with_sender(
+            &self.settings.microphone,
+            audio_tx,
+            self.audio_processing_config(),
+        ) {
             Ok(session) => self.media_session = Some(session),
             Err(err) => {
                 let media_error = self.tf("call.media_error", &[("error", &err.to_string())]);
@@ -2212,6 +2223,16 @@ impl MessengerApp {
                         if ui.button(self.t("call.refresh_devices")).clicked() {
                             self.refresh_media_devices();
                         }
+
+                        ui.separator();
+                        ui.heading(self.t("call.audio_processing"));
+                        let noise_suppression = self.t("call.noise_suppression");
+                        let automatic_gain_control = self.t("call.automatic_gain_control");
+                        ui.checkbox(&mut self.settings.noise_suppression, noise_suppression);
+                        ui.checkbox(
+                            &mut self.settings.automatic_gain_control,
+                            automatic_gain_control,
+                        );
 
                         ui.separator();
                         ui.heading(self.t("call.network"));

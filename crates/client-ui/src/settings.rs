@@ -58,6 +58,10 @@ pub struct AppSettings {
     pub turn_username: String,
     #[serde(default)]
     pub turn_password: String,
+    #[serde(default = "default_true")]
+    pub noise_suppression: bool,
+    #[serde(default = "default_true")]
+    pub automatic_gain_control: bool,
 }
 
 impl AppSettings {
@@ -103,4 +107,8 @@ fn default_media_device() -> String {
 
 fn default_ice_servers() -> String {
     "stun:stun.l.google.com:19302".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }

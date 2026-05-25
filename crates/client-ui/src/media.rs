@@ -43,6 +43,12 @@ pub struct IceConfig {
     pub turn_password: String,
 }
 
+#[derive(Clone, Copy)]
+pub struct AudioProcessingConfig {
+    pub noise_suppression: bool,
+    pub automatic_gain_control: bool,
+}
+
 pub fn microphone_devices() -> Vec<String> {
     let host = cpal::default_host();
     let mut devices = host
@@ -320,6 +326,7 @@ fn rtc_config(ice_config: IceConfig) -> RTCConfiguration {
 pub fn start_microphone_capture_with_sender(
     device_name: &str,
     audio_tx: Option<mpsc::Sender<Vec<u8>>>,
+    processing: AudioProcessingConfig,
 ) -> Result<MediaSession> {
     let host = cpal::default_host();
     let device = if device_name == SYSTEM_DEFAULT_DEVICE {
@@ -344,6 +351,7 @@ pub fn start_microphone_capture_with_sender(
             sample_rate,
             channels,
             audio_tx,
+            processing,
         )?,
         cpal::SampleFormat::I16 => build_input_stream::<i16>(
             &device,
@@ -352,6 +360,7 @@ pub fn start_microphone_capture_with_sender(
             sample_rate,
             channels,
             audio_tx,
+            processing,
         )?,
         cpal::SampleFormat::U16 => build_input_stream::<u16>(
             &device,
@@ -360,6 +369,7 @@ pub fn start_microphone_capture_with_sender(
             sample_rate,
             channels,
             audio_tx,
+            processing,
         )?,
         other => return Err(anyhow!("unsupported microphone sample format: {other:?}")),
     };
@@ -377,12 +387,14 @@ fn build_input_stream<T>(
     sample_rate: u32,
     channels: usize,
     audio_tx: Option<mpsc::Sender<Vec<u8>>>,
+    processing: AudioProcessingConfig,
 ) -> Result<cpal::Stream>
 where
     T: cpal::SizedSample + SampleLevel,
 {
     let mut frame = Vec::with_capacity((sample_rate / 50) as usize);
     let frame_samples = (sample_rate / 50).max(160) as usize;
+    let mut agc_gain = 1.0_f32;
     Ok(device.build_input_stream(
         &config,
         move |data: &[T], _| {
@@ -394,11 +406,22 @@ where
             level.store((peak * 1000.0) as u32, Ordering::Relaxed);
             if let Some(audio_tx) = audio_tx.as_ref() {
                 for chunk in data.chunks(channels.max(1)) {
-                    let mono = chunk
+                    let mut mono = chunk
                         .iter()
                         .map(SampleLevel::sample_level_signed)
                         .sum::<f32>()
                         / chunk.len().max(1) as f32;
+                    if processing.noise_suppression && mono.abs() < 0.012 {
+                        mono = 0.0;
+                    }
+                    if processing.automatic_gain_control {
+                        let level = mono.abs();
+                        if level > 0.001 {
+                            let target_gain = (0.18 / level).clamp(0.5, 4.0);
+                            agc_gain = (agc_gain * 0.995 + target_gain * 0.005).clamp(0.5, 4.0);
+                        }
+                        mono *= agc_gain;
+                    }
                     frame.push(mono.clamp(-1.0, 1.0));
                     if frame.len() >= frame_samples {
                         let payload = encode_audio_frame(sample_rate, &frame);
