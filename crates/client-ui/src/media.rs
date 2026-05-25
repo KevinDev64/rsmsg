@@ -6,6 +6,7 @@ use std::{
         mpsc,
     },
     thread,
+    time::Duration,
 };
 
 use anyhow::{Result, anyhow};
@@ -430,6 +431,66 @@ pub fn start_audio_playback(
         _stream: stream,
         _queue: queue,
     })
+}
+
+pub fn play_call_tone(device_name: String) {
+    thread::spawn(move || {
+        let _ = run_call_tone(&device_name);
+    });
+}
+
+fn run_call_tone(device_name: &str) -> Result<()> {
+    let host = cpal::default_host();
+    let device = if device_name == SYSTEM_DEFAULT_DEVICE {
+        host.default_output_device()
+    } else {
+        host.output_devices()
+            .ok()
+            .into_iter()
+            .flatten()
+            .find(|device| device.name().ok().as_deref() == Some(device_name))
+    }
+    .or_else(|| host.default_output_device())
+    .ok_or_else(|| anyhow!("speaker not found"))?;
+    let config = device.default_output_config()?;
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::F32 => build_tone_stream::<f32>(&device, config.into())?,
+        cpal::SampleFormat::I16 => build_tone_stream::<i16>(&device, config.into())?,
+        cpal::SampleFormat::U16 => build_tone_stream::<u16>(&device, config.into())?,
+        other => return Err(anyhow!("unsupported speaker sample format: {other:?}")),
+    };
+    stream.play()?;
+    thread::sleep(Duration::from_millis(1200));
+    Ok(())
+}
+
+fn build_tone_stream<T>(device: &cpal::Device, config: cpal::StreamConfig) -> Result<cpal::Stream>
+where
+    T: cpal::SizedSample + OutputSample,
+{
+    let sample_rate = config.sample_rate.0 as f32;
+    let channels = config.channels as usize;
+    let mut sample_index = 0_u64;
+    Ok(device.build_output_stream(
+        &config,
+        move |out: &mut [T], _| {
+            for frame in out.chunks_mut(channels) {
+                let t = sample_index as f32 / sample_rate;
+                let frequency = if (t * 4.0) as u32 % 2 == 0 {
+                    740.0
+                } else {
+                    920.0
+                };
+                let value = (t * frequency * std::f32::consts::TAU).sin() * 0.18;
+                for sample in frame {
+                    *sample = T::from_f32(value);
+                }
+                sample_index = sample_index.saturating_add(1);
+            }
+        },
+        move |_| {},
+        None,
+    )?)
 }
 
 fn build_output_stream<T>(

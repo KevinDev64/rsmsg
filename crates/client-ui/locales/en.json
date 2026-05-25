@@ -86,6 +86,7 @@
   "error.recipient_blocked_you": "You can't message this user because they blocked you.",
   "error.you_blocked_recipient": "You blocked this user. Unblock them to send messages.",
   "new_chat.title": "New chat",
+  "notification.incoming_call": "Incoming call from @{user}",
   "notification.new_message": "New message from @{user}",
   "placeholder.select_or_start": "Select or start chat",
   "profile.default_username": "Default username",

@@ -86,6 +86,7 @@
   "error.recipient_blocked_you": "Вы не можете писать этому пользователю, потому что он вас заблокировал.",
   "error.you_blocked_recipient": "Вы заблокировали этого пользователя. Разблокируйте его, чтобы отправлять сообщения.",
   "new_chat.title": "Новый чат",
+  "notification.incoming_call": "Входящий звонок от @{user}",
   "notification.new_message": "Новое сообщение от @{user}",
   "placeholder.select_or_start": "Выберите или начните чат",
   "profile.default_username": "Никнейм по умолчанию",

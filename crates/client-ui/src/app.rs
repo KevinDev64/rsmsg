@@ -1642,7 +1642,11 @@ impl MessengerApp {
                     &msg.from_device_uuid[..8.min(msg.from_device_uuid.len())]
                 )
             });
-        let title = self.tf("notification.new_message", &[("user", &nick)]);
+        let title = if incoming_call.is_some() {
+            self.tf("notification.incoming_call", &[("user", &nick)])
+        } else {
+            self.tf("notification.new_message", &[("user", &nick)])
+        };
         let body = text.clone();
         notifications::notify(&title, &body);
         let chat = self.history.chats.entry(nick.clone()).or_default();
@@ -1681,6 +1685,7 @@ impl MessengerApp {
                 self.status = self.t("call.busy");
                 return;
             }
+            media::play_call_tone(self.settings.speaker.clone());
             self.active_call = Some(CallState {
                 peer: nick,
                 peer_device_uuid: msg.from_device_uuid,
