@@ -22,6 +22,11 @@ use webrtc::{
 };
 
 pub const SYSTEM_DEFAULT_DEVICE: &str = "System default";
+const AUDIO_SAMPLE_RATE: usize = 48_000;
+const PLAYBACK_BUFFER_START: usize = AUDIO_SAMPLE_RATE / 10;
+const PLAYBACK_BUFFER_MIN: usize = AUDIO_SAMPLE_RATE / 25;
+const PLAYBACK_BUFFER_TARGET: usize = AUDIO_SAMPLE_RATE / 5;
+const PLAYBACK_BUFFER_MAX: usize = AUDIO_SAMPLE_RATE * 2;
 
 #[derive(Clone)]
 pub struct IceConfig {
@@ -382,7 +387,7 @@ fn attach_audio_receiver(
         if let Some(samples) = decode_audio_frame(&message.data) {
             let mut queue = playback_queue.lock().expect("audio_playback_queue");
             queue.extend(samples);
-            while queue.len() > 48_000 {
+            while queue.len() > PLAYBACK_BUFFER_MAX {
                 queue.pop_front();
             }
         } else {
@@ -435,12 +440,30 @@ fn build_output_stream<T>(
 where
     T: cpal::SizedSample + OutputSample,
 {
+    let mut playing = false;
     Ok(device.build_output_stream(
         &config,
         move |out: &mut [T], _| {
+            let output_len = out.len();
             let mut queue = queue.lock().expect("audio_playback_queue");
-            for sample in out {
-                let value = queue.pop_front().unwrap_or_default();
+            for sample in out.iter_mut() {
+                if !playing && queue.len() >= PLAYBACK_BUFFER_START {
+                    playing = true;
+                }
+                if playing && queue.len() <= PLAYBACK_BUFFER_MIN {
+                    playing = false;
+                }
+                while queue.len() > PLAYBACK_BUFFER_MAX {
+                    queue.pop_front();
+                }
+                while queue.len() > PLAYBACK_BUFFER_TARGET + output_len {
+                    queue.pop_front();
+                }
+                let value = if playing {
+                    queue.pop_front().unwrap_or_default()
+                } else {
+                    0.0
+                };
                 *sample = T::from_f32(value);
             }
         },
