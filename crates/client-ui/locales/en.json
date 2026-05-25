@@ -23,7 +23,7 @@
   "call.accepted": "Call accepted",
   "call.calling": "Calling @{user}...",
   "call.camera": "Camera",
-  "call.camera_stack_pending": "Camera enumeration will be enabled with the video media stack.",
+  "call.camera_stack_pending": "No camera found or camera permission was denied.",
   "call.decline": "Decline",
   "call.declined": "Call declined",
   "call.disable_camera": "Turn camera off",

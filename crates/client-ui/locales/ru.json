@@ -23,7 +23,7 @@
   "call.accepted": "Звонок принят",
   "call.calling": "Звоним @{user}...",
   "call.camera": "Камера",
-  "call.camera_stack_pending": "Список камер появится после подключения video media stack.",
+  "call.camera_stack_pending": "Камера не найдена или доступ к камере запрещён.",
   "call.decline": "Отклонить",
   "call.declined": "Звонок отклонён",
   "call.disable_camera": "Отключить камеру",

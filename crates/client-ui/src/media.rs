@@ -12,6 +12,7 @@ use std::{
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use nokhwa::{native_api_backend, nokhwa_initialize, query};
 use opus::{Application, Channels, Decoder, Encoder};
 use webrtc::{
     api::{APIBuilder, media_engine::MIME_TYPE_OPUS},
@@ -80,7 +81,20 @@ pub fn speaker_devices() -> Vec<String> {
 }
 
 pub fn camera_devices() -> Vec<String> {
-    Vec::new()
+    let _ = nokhwa_initialize(|_| {});
+    let Some(backend) = native_api_backend() else {
+        return Vec::new();
+    };
+    let mut devices = query(backend)
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|camera| camera.human_name())
+        .filter(|name| !name.trim().is_empty())
+        .collect::<Vec<_>>();
+    devices.sort();
+    devices.dedup();
+    devices
 }
 
 pub struct MediaSession {
