@@ -5,6 +5,7 @@
 - Rust (stable) и Cargo
 - Docker + Docker Compose
 - `sqlx-cli`
+- CMake для сборки bundled Opus codec
 
 Для Linux-сборок клиента с tray/уведомлениями могут понадобиться системные пакеты GTK/AppIndicator и D-Bus notification daemon.
 Названия пакетов зависят от дистрибутива, обычно это `libgtk-3-dev`, `libayatana-appindicator3-dev` или `libappindicator3-dev`.

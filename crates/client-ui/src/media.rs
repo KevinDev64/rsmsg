@@ -12,15 +12,19 @@ use std::{
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use opus::{Application, Channels, Decoder, Encoder};
 use webrtc::{
-    api::APIBuilder,
+    api::{APIBuilder, media_engine::MIME_TYPE_OPUS},
     data_channel::{RTCDataChannel, data_channel_message::DataChannelMessage},
     ice_transport::ice_server::RTCIceServer,
     peer_connection::{
         RTCPeerConnection, configuration::RTCConfiguration,
         sdp::session_description::RTCSessionDescription,
     },
+    rtp_transceiver::rtp_codec::RTCRtpCodecCapability,
+    track::track_local::{TrackLocal, track_local_static_sample::TrackLocalStaticSample},
 };
+use webrtc_media::Sample;
 
 pub const SYSTEM_DEFAULT_DEVICE: &str = "System default";
 const AUDIO_SAMPLE_RATE: usize = 48_000;
@@ -28,6 +32,9 @@ const PLAYBACK_BUFFER_START: usize = AUDIO_SAMPLE_RATE / 10;
 const PLAYBACK_BUFFER_MIN: usize = AUDIO_SAMPLE_RATE / 25;
 const PLAYBACK_BUFFER_TARGET: usize = AUDIO_SAMPLE_RATE / 5;
 const PLAYBACK_BUFFER_MAX: usize = AUDIO_SAMPLE_RATE * 2;
+const OPUS_SAMPLE_RATE: u32 = 48_000;
+const OPUS_FRAME_SAMPLES: usize = 960;
+const OPUS_MAX_PACKET_BYTES: usize = 1275;
 
 #[derive(Clone)]
 pub struct IceConfig {
@@ -86,6 +93,7 @@ pub struct WebRtcSession {
     _data_channel: Arc<Mutex<Option<Arc<RTCDataChannel>>>>,
     outbound_audio_tx: mpsc::Sender<Vec<u8>>,
     playback_queue: Arc<Mutex<VecDeque<f32>>>,
+    _audio_track: Arc<TrackLocalStaticSample>,
 }
 
 impl MediaSession {
@@ -162,26 +170,86 @@ impl WebRtcSession {
         let status = Arc::new(Mutex::new("WebRTC starting".to_string()));
         let data_channel: Arc<Mutex<Option<Arc<RTCDataChannel>>>> = Arc::new(Mutex::new(None));
         let playback_queue = Arc::new(Mutex::new(VecDeque::<f32>::new()));
+        let audio_track = Arc::new(TrackLocalStaticSample::new(
+            RTCRtpCodecCapability {
+                mime_type: MIME_TYPE_OPUS.to_string(),
+                clock_rate: OPUS_SAMPLE_RATE,
+                channels: 1,
+                ..Default::default()
+            },
+            "rsmsg-audio".to_string(),
+            "rsmsg-call".to_string(),
+        ));
+        let rtp_sender = peer_connection
+            .add_track(audio_track.clone() as Arc<dyn TrackLocal + Send + Sync>)
+            .await?;
+        tokio::spawn(async move { while rtp_sender.read_rtcp().await.is_ok() {} });
         let (outbound_audio_tx, outbound_audio_rx) = mpsc::channel::<Vec<u8>>();
-        let data_channel_for_sender = data_channel.clone();
+        let audio_track_for_sender = audio_track.clone();
         let status_for_sender = status.clone();
         thread::spawn(move || {
             let Ok(rt) = tokio::runtime::Runtime::new() else {
                 return;
             };
+            let Ok(mut encoder) = Encoder::new(OPUS_SAMPLE_RATE, Channels::Mono, Application::Voip)
+            else {
+                *status_for_sender.lock().expect("webrtc_status") =
+                    "Opus encoder failed".to_string();
+                return;
+            };
+            let mut opus_output = vec![0_u8; OPUS_MAX_PACKET_BYTES];
             while let Ok(frame) = outbound_audio_rx.recv() {
-                let channel = data_channel_for_sender
-                    .lock()
-                    .expect("webrtc_data_channel")
-                    .clone();
-                if let Some(channel) = channel {
-                    if rt.block_on(channel.send(&Bytes::from(frame))).is_err() {
-                        *status_for_sender.lock().expect("webrtc_status") =
-                            "WebRTC audio send failed".to_string();
-                    }
+                let Some((sample_rate, samples)) = decode_audio_frame_with_rate(&frame) else {
+                    continue;
+                };
+                let opus_frame = resample_to_opus(sample_rate, &samples);
+                let Ok(packet_len) = encoder.encode_float(&opus_frame, &mut opus_output) else {
+                    *status_for_sender.lock().expect("webrtc_status") =
+                        "Opus encode failed".to_string();
+                    continue;
+                };
+                let sample = Sample {
+                    data: Bytes::copy_from_slice(&opus_output[..packet_len]),
+                    duration: Duration::from_millis(20),
+                    ..Default::default()
+                };
+                if rt
+                    .block_on(audio_track_for_sender.write_sample(&sample))
+                    .is_err()
+                {
+                    *status_for_sender.lock().expect("webrtc_status") =
+                        "WebRTC audio track send failed".to_string();
                 }
             }
         });
+        let playback_queue_for_track = playback_queue.clone();
+        let status_for_track = status.clone();
+        peer_connection.on_track(Box::new(move |track, _, _| {
+            let playback_queue = playback_queue_for_track.clone();
+            let status = status_for_track.clone();
+            Box::pin(async move {
+                if track.codec().capability.mime_type != MIME_TYPE_OPUS {
+                    return;
+                }
+                let Ok(mut decoder) = Decoder::new(OPUS_SAMPLE_RATE, Channels::Mono) else {
+                    *status.lock().expect("webrtc_status") = "Opus decoder failed".to_string();
+                    return;
+                };
+                let mut output = vec![0_f32; OPUS_FRAME_SAMPLES * 6];
+                while let Ok((packet, _)) = track.read_rtp().await {
+                    let Ok(samples) = decoder.decode_float(&packet.payload, &mut output, false)
+                    else {
+                        *status.lock().expect("webrtc_status") = "Opus decode failed".to_string();
+                        continue;
+                    };
+                    let mut queue = playback_queue.lock().expect("audio_playback_queue");
+                    queue.extend(output[..samples].iter().copied());
+                    while queue.len() > PLAYBACK_BUFFER_MAX {
+                        queue.pop_front();
+                    }
+                }
+            })
+        }));
         let status_for_state = status.clone();
         peer_connection.on_peer_connection_state_change(Box::new(move |state| {
             *status_for_state.lock().expect("webrtc_status") = format!("WebRTC {state}");
@@ -227,6 +295,7 @@ impl WebRtcSession {
             _data_channel: data_channel,
             outbound_audio_tx,
             playback_queue,
+            _audio_track: audio_track,
         })
     }
 }
@@ -566,12 +635,36 @@ fn encode_audio_frame(sample_rate: u32, samples: &[f32]) -> Vec<u8> {
 }
 
 fn decode_audio_frame(payload: &[u8]) -> Option<Vec<f32>> {
+    decode_audio_frame_with_rate(payload).map(|(_, samples)| samples)
+}
+
+fn decode_audio_frame_with_rate(payload: &[u8]) -> Option<(u32, Vec<f32>)> {
     if payload.len() < 8 || &payload[..4] != b"RSA1" {
         return None;
     }
+    let sample_rate = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
     let mut samples = Vec::with_capacity((payload.len() - 8) / 4);
     for chunk in payload[8..].chunks_exact(4) {
         samples.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]).clamp(-1.0, 1.0));
     }
-    Some(samples)
+    Some((sample_rate, samples))
+}
+
+fn resample_to_opus(sample_rate: u32, samples: &[f32]) -> Vec<f32> {
+    if sample_rate == OPUS_SAMPLE_RATE && samples.len() == OPUS_FRAME_SAMPLES {
+        return samples.to_vec();
+    }
+    if samples.is_empty() {
+        return vec![0.0; OPUS_FRAME_SAMPLES];
+    }
+    let ratio = sample_rate as f32 / OPUS_SAMPLE_RATE as f32;
+    (0..OPUS_FRAME_SAMPLES)
+        .map(|index| {
+            let source = index as f32 * ratio;
+            let lower = source.floor() as usize;
+            let upper = (lower + 1).min(samples.len() - 1);
+            let mix = source - lower as f32;
+            (samples[lower] * (1.0 - mix) + samples[upper] * mix).clamp(-1.0, 1.0)
+        })
+        .collect()
 }
