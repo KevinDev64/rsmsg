@@ -29,7 +29,7 @@ futures-util = "0.3"
 hkdf = "0.12"
 rand = "0.8"
 notify-rust = "4"
-nokhwa = { version = "0.10", default-features = false, features = ["input-native"] }
+nokhwa = { version = "0.10", default-features = false, features = ["decoding", "input-native"] }
 opus = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rfd = "0.15"

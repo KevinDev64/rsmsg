@@ -38,6 +38,7 @@
   "call.media_devices": "Call devices",
   "call.media_active": "Microphone capture active",
   "call.media_error": "Microphone capture failed: {error}",
+  "call.local_video_status": "Local video: {width}x{height}, frames: {frames}",
   "call.microphone": "Microphone",
   "call.network": "Call network",
   "call.ice_servers": "STUN/TURN servers, one per line",

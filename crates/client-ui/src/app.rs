@@ -72,6 +72,7 @@ pub struct MessengerApp {
     speaker_devices: Vec<String>,
     camera_devices: Vec<String>,
     media_session: Option<media::MediaSession>,
+    video_capture_session: Option<media::VideoCaptureSession>,
     webrtc_session: Option<media::WebRtcSession>,
     audio_playback: Option<media::AudioPlayback>,
     media_failed_call_id: Option<String>,
@@ -316,6 +317,7 @@ impl MessengerApp {
             speaker_devices: media::speaker_devices(),
             camera_devices: media::camera_devices(),
             media_session: None,
+            video_capture_session: None,
             webrtc_session: None,
             audio_playback: None,
             media_failed_call_id: None,
@@ -392,6 +394,22 @@ impl MessengerApp {
                 }
             }
         }
+    }
+
+    fn sync_video_session(&mut self) {
+        let Some(call) = self.active_call.as_ref() else {
+            self.video_capture_session = None;
+            return;
+        };
+        if !call.video || !call.accepted || call.camera_disabled {
+            self.video_capture_session = None;
+            return;
+        }
+        if self.video_capture_session.is_some() {
+            return;
+        }
+        self.video_capture_session =
+            Some(media::start_camera_capture(self.settings.camera.clone()));
     }
 
     fn register_or_login(&mut self, create: bool) {
@@ -978,6 +996,7 @@ impl MessengerApp {
                             self.status = status;
                             self.active_call = None;
                             self.call_signal_rx = None;
+                            self.video_capture_session = None;
                             self.stop_webrtc_session();
                         }
                     }
@@ -1016,6 +1035,7 @@ impl MessengerApp {
             });
             self.active_call = None;
             self.call_signal_rx = None;
+            self.video_capture_session = None;
             self.stop_webrtc_session();
             self.status = self.t("call.no_answer");
             return;
@@ -1739,6 +1759,7 @@ impl eframe::App for MessengerApp {
         self.poll_call_signals();
         self.poll_webrtc_result();
         self.sync_media_session();
+        self.sync_video_session();
         ctx.request_repaint_after(Duration::from_millis(800));
         if self.auth.is_some() && self.last_sync_at.elapsed() >= Duration::from_secs(2) {
             self.sync_incoming();
@@ -2352,6 +2373,14 @@ impl MessengerApp {
             .webrtc_session
             .as_ref()
             .map(media::WebRtcSession::status);
+        let video_status = self
+            .video_capture_session
+            .as_ref()
+            .map(media::VideoCaptureSession::status);
+        let video_info = self
+            .video_capture_session
+            .as_ref()
+            .and_then(media::VideoCaptureSession::latest);
         let mut microphone_muted = call.microphone_muted;
         let mut camera_disabled = call.camera_disabled;
         ctx.input(|input| {
@@ -2397,6 +2426,19 @@ impl MessengerApp {
                 ui.label(signaling_status);
                 if let Some(status) = webrtc_status {
                     ui.label(status);
+                }
+                if let Some(status) = video_status {
+                    ui.label(status);
+                }
+                if let Some(info) = video_info {
+                    ui.label(self.tf(
+                        "call.local_video_status",
+                        &[
+                            ("width", &info.width.to_string()),
+                            ("height", &info.height.to_string()),
+                            ("frames", &info.frames.to_string()),
+                        ],
+                    ));
                 }
                 if accepted && !microphone_muted {
                     ui.label(media_active_label);
@@ -2477,6 +2519,7 @@ impl MessengerApp {
             }
             self.active_call = None;
             self.call_signal_rx = None;
+            self.video_capture_session = None;
             self.stop_webrtc_session();
             self.status = self.t("call.declined");
         } else if end_call {
@@ -2495,6 +2538,7 @@ impl MessengerApp {
             }
             self.active_call = None;
             self.call_signal_rx = None;
+            self.video_capture_session = None;
             self.stop_webrtc_session();
             self.status = self.t("call.ended");
         } else if let Some(call) = self.active_call.as_mut() {

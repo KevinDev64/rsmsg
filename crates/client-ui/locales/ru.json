@@ -38,6 +38,7 @@
   "call.media_devices": "Устройства звонков",
   "call.media_active": "Захват микрофона активен",
   "call.media_error": "Не удалось включить микрофон: {error}",
+  "call.local_video_status": "Локальное видео: {width}x{height}, кадров: {frames}",
   "call.microphone": "Микрофон",
   "call.network": "Сеть звонков",
   "call.ice_servers": "STUN/TURN серверы, по одному в строке",

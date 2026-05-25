@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc,
     },
     thread,
@@ -12,7 +12,12 @@ use std::{
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use nokhwa::{native_api_backend, nokhwa_initialize, query};
+use nokhwa::{
+    Camera, native_api_backend, nokhwa_initialize,
+    pixel_format::RgbFormat,
+    query,
+    utils::{CameraIndex, RequestedFormat, RequestedFormatType},
+};
 use opus::{Application, Channels, Decoder, Encoder};
 use webrtc::{
     api::{APIBuilder, media_engine::MIME_TYPE_OPUS},
@@ -107,6 +112,19 @@ pub struct AudioPlayback {
     _queue: Arc<Mutex<VecDeque<f32>>>,
 }
 
+#[derive(Clone, Default)]
+pub struct VideoFrameInfo {
+    pub width: u32,
+    pub height: u32,
+    pub frames: u64,
+}
+
+pub struct VideoCaptureSession {
+    stop: Arc<AtomicBool>,
+    latest: Arc<Mutex<Option<VideoFrameInfo>>>,
+    status: Arc<Mutex<String>>,
+}
+
 pub struct WebRtcSession {
     peer_connection: Arc<RTCPeerConnection>,
     status: Arc<Mutex<String>>,
@@ -119,6 +137,22 @@ pub struct WebRtcSession {
 impl MediaSession {
     pub fn microphone_level(&self) -> f32 {
         self.level.load(Ordering::Relaxed) as f32 / 1000.0
+    }
+}
+
+impl VideoCaptureSession {
+    pub fn latest(&self) -> Option<VideoFrameInfo> {
+        self.latest.lock().expect("video_capture_latest").clone()
+    }
+
+    pub fn status(&self) -> String {
+        self.status.lock().expect("video_capture_status").clone()
+    }
+}
+
+impl Drop for VideoCaptureSession {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
     }
 }
 
@@ -392,6 +426,73 @@ pub fn start_microphone_capture_with_sender(
         _stream: stream,
         level,
     })
+}
+
+pub fn start_camera_capture(device_name: String) -> VideoCaptureSession {
+    let stop = Arc::new(AtomicBool::new(false));
+    let latest = Arc::new(Mutex::new(None));
+    let status = Arc::new(Mutex::new("Camera starting".to_string()));
+    let stop_for_thread = stop.clone();
+    let latest_for_thread = latest.clone();
+    let status_for_thread = status.clone();
+    thread::spawn(move || {
+        let result = run_camera_capture(
+            &device_name,
+            stop_for_thread,
+            latest_for_thread,
+            status_for_thread.clone(),
+        );
+        if let Err(err) = result {
+            *status_for_thread.lock().expect("video_capture_status") =
+                format!("Camera capture failed: {err}");
+        }
+    });
+    VideoCaptureSession {
+        stop,
+        latest,
+        status,
+    }
+}
+
+fn run_camera_capture(
+    device_name: &str,
+    stop: Arc<AtomicBool>,
+    latest: Arc<Mutex<Option<VideoFrameInfo>>>,
+    status: Arc<Mutex<String>>,
+) -> Result<()> {
+    let _ = nokhwa_initialize(|_| {});
+    let backend = native_api_backend().ok_or_else(|| anyhow!("camera backend unavailable"))?;
+    let cameras = query(backend)?;
+    let index = if device_name == SYSTEM_DEFAULT_DEVICE {
+        cameras
+            .first()
+            .map(|camera| camera.index().clone())
+            .unwrap_or_else(|| CameraIndex::Index(0))
+    } else {
+        cameras
+            .iter()
+            .find(|camera| camera.human_name() == device_name)
+            .map(|camera| camera.index().clone())
+            .ok_or_else(|| anyhow!("camera not found"))?
+    };
+    let requested =
+        RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
+    let mut camera = Camera::with_backend(index, requested, backend)?;
+    camera.open_stream()?;
+    *status.lock().expect("video_capture_status") = "Camera capture active".to_string();
+    let mut frames = 0_u64;
+    while !stop.load(Ordering::Relaxed) {
+        let frame = camera.frame()?;
+        let resolution = frame.resolution();
+        frames = frames.saturating_add(1);
+        *latest.lock().expect("video_capture_latest") = Some(VideoFrameInfo {
+            width: resolution.width(),
+            height: resolution.height(),
+            frames,
+        });
+    }
+    let _ = camera.stop_stream();
+    Ok(())
 }
 
 fn build_input_stream<T>(
