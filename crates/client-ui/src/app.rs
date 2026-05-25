@@ -852,6 +852,7 @@ impl MessengerApp {
 
     fn start_call(&mut self, video: bool) {
         if self.call_rx.is_some() || self.active_call.is_some() {
+            self.status = self.t("call.busy");
             return;
         }
         let Some(auth) = self.auth.clone() else {
@@ -934,6 +935,10 @@ impl MessengerApp {
                                     "webrtc-answer" => remote_answer = Some(signal.payload),
                                     "decline" => {
                                         close_status = Some(declined_text.clone());
+                                        break;
+                                    }
+                                    "busy" => {
+                                        close_status = Some(self.t("call.busy"));
                                         break;
                                     }
                                     "hangup" => {
@@ -1657,6 +1662,25 @@ impl MessengerApp {
             *self.history.unread_by_peer.entry(nick.clone()).or_default() += 1;
         }
         if let Some((call_id, video)) = incoming_call {
+            if self.active_call.is_some() {
+                if let Some(auth) = self.auth.clone() {
+                    let core = self.core.clone();
+                    let busy_call_id = call_id.clone();
+                    let peer_device_uuid = msg.from_device_uuid.clone();
+                    thread::spawn(move || {
+                        let rt = runtime();
+                        let _ = rt.block_on(core.send_call_signal(
+                            &auth,
+                            busy_call_id,
+                            peer_device_uuid,
+                            "busy".to_string(),
+                            "{}".to_string(),
+                        ));
+                    });
+                }
+                self.status = self.t("call.busy");
+                return;
+            }
             self.active_call = Some(CallState {
                 peer: nick,
                 peer_device_uuid: msg.from_device_uuid,

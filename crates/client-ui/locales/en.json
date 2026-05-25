@@ -16,6 +16,7 @@
   "block.you_blocked_banner": "You blocked this user. Unblock them to continue this chat.",
   "call.audio_active": "Audio call active",
   "call.audio_call": "Audio call",
+  "call.busy": "User is busy in another call.",
   "call.accept": "Accept",
   "call.accepted": "Call accepted",
   "call.calling": "Calling @{user}...",
