@@ -2333,6 +2333,17 @@ impl MessengerApp {
             .map(media::WebRtcSession::status);
         let mut microphone_muted = call.microphone_muted;
         let mut camera_disabled = call.camera_disabled;
+        ctx.input(|input| {
+            if input.key_pressed(egui::Key::Escape) {
+                end_call = true;
+            }
+            if accepted
+                && input.key_pressed(egui::Key::M)
+                && (input.modifiers.command || input.modifiers.ctrl)
+            {
+                microphone_muted = !microphone_muted;
+            }
+        });
         let active_label = if video {
             self.t("call.video_active")
         } else {
