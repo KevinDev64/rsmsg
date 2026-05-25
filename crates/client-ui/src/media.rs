@@ -6,7 +6,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Result, anyhow};
@@ -131,7 +131,9 @@ pub struct WebRtcSession {
     status: Arc<Mutex<String>>,
     _data_channel: Arc<Mutex<Option<Arc<RTCDataChannel>>>>,
     outbound_audio_tx: mpsc::Sender<Vec<u8>>,
+    outbound_video_tx: mpsc::Sender<VideoFrameInfo>,
     playback_queue: Arc<Mutex<VecDeque<f32>>>,
+    remote_video: Arc<Mutex<Option<VideoFrameInfo>>>,
     _audio_track: Arc<TrackLocalStaticSample>,
 }
 
@@ -172,6 +174,14 @@ impl WebRtcSession {
 
     pub fn playback_queue(&self) -> Arc<Mutex<VecDeque<f32>>> {
         self.playback_queue.clone()
+    }
+
+    pub fn video_sender(&self) -> mpsc::Sender<VideoFrameInfo> {
+        self.outbound_video_tx.clone()
+    }
+
+    pub fn remote_video(&self) -> Option<VideoFrameInfo> {
+        self.remote_video.lock().expect("remote_video").clone()
     }
 
     pub async fn create_offer(ice_config: IceConfig) -> Result<(Self, String)> {
@@ -225,6 +235,7 @@ impl WebRtcSession {
         let status = Arc::new(Mutex::new("WebRTC starting".to_string()));
         let data_channel: Arc<Mutex<Option<Arc<RTCDataChannel>>>> = Arc::new(Mutex::new(None));
         let playback_queue = Arc::new(Mutex::new(VecDeque::<f32>::new()));
+        let remote_video = Arc::new(Mutex::new(None));
         let audio_track = Arc::new(TrackLocalStaticSample::new(
             RTCRtpCodecCapability {
                 mime_type: MIME_TYPE_OPUS.to_string(),
@@ -240,6 +251,7 @@ impl WebRtcSession {
             .await?;
         tokio::spawn(async move { while rtp_sender.read_rtcp().await.is_ok() {} });
         let (outbound_audio_tx, outbound_audio_rx) = mpsc::channel::<Vec<u8>>();
+        let (outbound_video_tx, outbound_video_rx) = mpsc::channel::<VideoFrameInfo>();
         let audio_track_for_sender = audio_track.clone();
         let status_for_sender = status.clone();
         thread::spawn(move || {
@@ -274,6 +286,28 @@ impl WebRtcSession {
                 {
                     *status_for_sender.lock().expect("webrtc_status") =
                         "WebRTC audio track send failed".to_string();
+                }
+            }
+        });
+        let data_channel_for_video = data_channel.clone();
+        let status_for_video = status.clone();
+        thread::spawn(move || {
+            let Ok(rt) = tokio::runtime::Runtime::new() else {
+                return;
+            };
+            while let Ok(frame) = outbound_video_rx.recv() {
+                let channel = data_channel_for_video
+                    .lock()
+                    .expect("webrtc_data_channel")
+                    .clone();
+                if let Some(channel) = channel {
+                    if rt
+                        .block_on(channel.send(&Bytes::from(encode_video_frame(&frame))))
+                        .is_err()
+                    {
+                        *status_for_video.lock().expect("webrtc_status") =
+                            "WebRTC video send failed".to_string();
+                    }
                 }
             }
         });
@@ -321,11 +355,17 @@ impl WebRtcSession {
                     "WebRTC data channel open".to_string();
                 Box::pin(async {})
             }));
-            attach_audio_receiver(channel, playback_queue.clone(), status.clone());
+            attach_data_receiver(
+                channel,
+                playback_queue.clone(),
+                remote_video.clone(),
+                status.clone(),
+            );
         } else {
             let status_for_channel = status.clone();
             let data_channel_for_handler = data_channel.clone();
             let playback_queue_for_handler = playback_queue.clone();
+            let remote_video_for_handler = remote_video.clone();
             peer_connection.on_data_channel(Box::new(move |channel| {
                 *data_channel_for_handler
                     .lock()
@@ -336,9 +376,10 @@ impl WebRtcSession {
                         "WebRTC data channel open".to_string();
                     Box::pin(async {})
                 }));
-                attach_audio_receiver(
+                attach_data_receiver(
                     channel,
                     playback_queue_for_handler.clone(),
+                    remote_video_for_handler.clone(),
                     status_for_channel.clone(),
                 );
                 Box::pin(async {})
@@ -349,7 +390,9 @@ impl WebRtcSession {
             status,
             _data_channel: data_channel,
             outbound_audio_tx,
+            outbound_video_tx,
             playback_queue,
+            remote_video,
             _audio_track: audio_track,
         })
     }
@@ -429,7 +472,10 @@ pub fn start_microphone_capture_with_sender(
     })
 }
 
-pub fn start_camera_capture(device_name: String) -> VideoCaptureSession {
+pub fn start_camera_capture(
+    device_name: String,
+    video_tx: Option<mpsc::Sender<VideoFrameInfo>>,
+) -> VideoCaptureSession {
     let stop = Arc::new(AtomicBool::new(false));
     let latest = Arc::new(Mutex::new(None));
     let status = Arc::new(Mutex::new("Camera starting".to_string()));
@@ -442,6 +488,7 @@ pub fn start_camera_capture(device_name: String) -> VideoCaptureSession {
             stop_for_thread,
             latest_for_thread,
             status_for_thread.clone(),
+            video_tx,
         );
         if let Err(err) = result {
             *status_for_thread.lock().expect("video_capture_status") =
@@ -460,6 +507,7 @@ fn run_camera_capture(
     stop: Arc<AtomicBool>,
     latest: Arc<Mutex<Option<VideoFrameInfo>>>,
     status: Arc<Mutex<String>>,
+    video_tx: Option<mpsc::Sender<VideoFrameInfo>>,
 ) -> Result<()> {
     let _ = nokhwa_initialize(|_| {});
     let backend = native_api_backend().ok_or_else(|| anyhow!("camera backend unavailable"))?;
@@ -482,18 +530,26 @@ fn run_camera_capture(
     camera.open_stream()?;
     *status.lock().expect("video_capture_status") = "Camera capture active".to_string();
     let mut frames = 0_u64;
+    let mut last_sent = Instant::now();
     while !stop.load(Ordering::Relaxed) {
         let frame = camera.frame()?;
         let resolution = frame.resolution();
         let image = frame.decode_image::<RgbFormat>()?;
         let (width, height, rgb) = preview_rgb(image.width(), image.height(), image.as_raw());
         frames = frames.saturating_add(1);
-        *latest.lock().expect("video_capture_latest") = Some(VideoFrameInfo {
+        let info = VideoFrameInfo {
             width,
             height,
             frames,
             rgb,
-        });
+        };
+        *latest.lock().expect("video_capture_latest") = Some(info.clone());
+        if last_sent.elapsed() >= Duration::from_millis(200) {
+            if let Some(video_tx) = video_tx.as_ref() {
+                let _ = video_tx.send(info);
+            }
+            last_sent = Instant::now();
+        }
         let _ = resolution;
     }
     let _ = camera.stop_stream();
@@ -613,13 +669,16 @@ impl SampleLevel for u16 {
     }
 }
 
-fn attach_audio_receiver(
+fn attach_data_receiver(
     channel: Arc<RTCDataChannel>,
     playback_queue: Arc<Mutex<VecDeque<f32>>>,
+    remote_video: Arc<Mutex<Option<VideoFrameInfo>>>,
     status: Arc<Mutex<String>>,
 ) {
     channel.on_message(Box::new(move |message: DataChannelMessage| {
-        if let Some(samples) = decode_audio_frame(&message.data) {
+        if let Some(frame) = decode_video_frame(&message.data) {
+            *remote_video.lock().expect("remote_video") = Some(frame);
+        } else if let Some(samples) = decode_audio_frame(&message.data) {
             let mut queue = playback_queue.lock().expect("audio_playback_queue");
             queue.extend(samples);
             while queue.len() > PLAYBACK_BUFFER_MAX {
@@ -797,6 +856,44 @@ fn encode_audio_frame(sample_rate: u32, samples: &[f32]) -> Vec<u8> {
         out.extend_from_slice(&sample.to_le_bytes());
     }
     out
+}
+
+fn encode_video_frame(frame: &VideoFrameInfo) -> Vec<u8> {
+    let mut out = Vec::with_capacity(20 + frame.rgb.len());
+    out.extend_from_slice(b"RSV1");
+    out.extend_from_slice(&frame.width.to_le_bytes());
+    out.extend_from_slice(&frame.height.to_le_bytes());
+    out.extend_from_slice(&frame.frames.to_le_bytes());
+    out.extend_from_slice(&frame.rgb);
+    out
+}
+
+fn decode_video_frame(payload: &[u8]) -> Option<VideoFrameInfo> {
+    if payload.len() < 20 || &payload[..4] != b"RSV1" {
+        return None;
+    }
+    let width = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+    let height = u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]);
+    let frames = u64::from_le_bytes([
+        payload[12],
+        payload[13],
+        payload[14],
+        payload[15],
+        payload[16],
+        payload[17],
+        payload[18],
+        payload[19],
+    ]);
+    let expected = width as usize * height as usize * 3;
+    if payload.len() - 20 != expected {
+        return None;
+    }
+    Some(VideoFrameInfo {
+        width,
+        height,
+        frames,
+        rgb: payload[20..].to_vec(),
+    })
 }
 
 fn decode_audio_frame(payload: &[u8]) -> Option<Vec<f32>> {

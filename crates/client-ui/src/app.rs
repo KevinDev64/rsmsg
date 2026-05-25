@@ -408,8 +408,17 @@ impl MessengerApp {
         if self.video_capture_session.is_some() {
             return;
         }
-        self.video_capture_session =
-            Some(media::start_camera_capture(self.settings.camera.clone()));
+        let Some(video_tx) = self
+            .webrtc_session
+            .as_ref()
+            .map(media::WebRtcSession::video_sender)
+        else {
+            return;
+        };
+        self.video_capture_session = Some(media::start_camera_capture(
+            self.settings.camera.clone(),
+            Some(video_tx),
+        ));
     }
 
     fn register_or_login(&mut self, create: bool) {
@@ -2381,6 +2390,10 @@ impl MessengerApp {
             .video_capture_session
             .as_ref()
             .and_then(media::VideoCaptureSession::latest);
+        let remote_video_info = self
+            .webrtc_session
+            .as_ref()
+            .and_then(media::WebRtcSession::remote_video);
         let mut microphone_muted = call.microphone_muted;
         let mut camera_disabled = call.camera_disabled;
         ctx.input(|input| {
@@ -2446,6 +2459,31 @@ impl MessengerApp {
                         );
                         let texture = ctx.load_texture(
                             format!("local-video-{}", info.frames),
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        ui.image((
+                            texture.id(),
+                            egui::vec2(info.width as f32, info.height as f32),
+                        ));
+                    }
+                }
+                if let Some(info) = remote_video_info {
+                    ui.label(self.tf(
+                        "call.remote_video_status",
+                        &[
+                            ("width", &info.width.to_string()),
+                            ("height", &info.height.to_string()),
+                            ("frames", &info.frames.to_string()),
+                        ],
+                    ));
+                    if !info.rgb.is_empty() {
+                        let image = egui::ColorImage::from_rgb(
+                            [info.width as usize, info.height as usize],
+                            &info.rgb,
+                        );
+                        let texture = ctx.load_texture(
+                            format!("remote-video-{}", info.frames),
                             image,
                             egui::TextureOptions::LINEAR,
                         );
