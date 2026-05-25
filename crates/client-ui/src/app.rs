@@ -2439,6 +2439,21 @@ impl MessengerApp {
                             ("frames", &info.frames.to_string()),
                         ],
                     ));
+                    if !info.rgb.is_empty() {
+                        let image = egui::ColorImage::from_rgb(
+                            [info.width as usize, info.height as usize],
+                            &info.rgb,
+                        );
+                        let texture = ctx.load_texture(
+                            format!("local-video-{}", info.frames),
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        ui.image((
+                            texture.id(),
+                            egui::vec2(info.width as f32, info.height as f32),
+                        ));
+                    }
                 }
                 if accepted && !microphone_muted {
                     ui.label(media_active_label);

@@ -117,6 +117,7 @@ pub struct VideoFrameInfo {
     pub width: u32,
     pub height: u32,
     pub frames: u64,
+    pub rgb: Vec<u8>,
 }
 
 pub struct VideoCaptureSession {
@@ -484,15 +485,41 @@ fn run_camera_capture(
     while !stop.load(Ordering::Relaxed) {
         let frame = camera.frame()?;
         let resolution = frame.resolution();
+        let image = frame.decode_image::<RgbFormat>()?;
+        let (width, height, rgb) = preview_rgb(image.width(), image.height(), image.as_raw());
         frames = frames.saturating_add(1);
         *latest.lock().expect("video_capture_latest") = Some(VideoFrameInfo {
-            width: resolution.width(),
-            height: resolution.height(),
+            width,
+            height,
             frames,
+            rgb,
         });
+        let _ = resolution;
     }
     let _ = camera.stop_stream();
     Ok(())
+}
+
+fn preview_rgb(width: u32, height: u32, rgb: &[u8]) -> (u32, u32, Vec<u8>) {
+    let target_width = width.min(320).max(1);
+    let target_height =
+        ((height.max(1) as u64 * target_width as u64) / width.max(1) as u64).max(1) as u32;
+    if target_width == width && target_height == height {
+        return (width, height, rgb.to_vec());
+    }
+    let mut out = vec![0_u8; target_width as usize * target_height as usize * 3];
+    for y in 0..target_height {
+        let source_y = (y as u64 * height as u64 / target_height as u64) as u32;
+        for x in 0..target_width {
+            let source_x = (x as u64 * width as u64 / target_width as u64) as u32;
+            let source = ((source_y * width + source_x) * 3) as usize;
+            let target = ((y * target_width + x) * 3) as usize;
+            if source + 2 < rgb.len() && target + 2 < out.len() {
+                out[target..target + 3].copy_from_slice(&rgb[source..source + 3]);
+            }
+        }
+    }
+    (target_width, target_height, out)
 }
 
 fn build_input_stream<T>(
