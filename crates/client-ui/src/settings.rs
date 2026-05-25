@@ -49,6 +49,8 @@ pub struct AppSettings {
     #[serde(default = "default_media_device")]
     pub microphone: String,
     #[serde(default = "default_media_device")]
+    pub speaker: String,
+    #[serde(default = "default_media_device")]
     pub camera: String,
     #[serde(default = "default_ice_servers")]
     pub ice_servers: String,

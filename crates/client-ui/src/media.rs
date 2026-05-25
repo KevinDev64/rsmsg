@@ -45,6 +45,21 @@ pub fn microphone_devices() -> Vec<String> {
     devices
 }
 
+pub fn speaker_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    let mut devices = host
+        .output_devices()
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|device| device.name().ok())
+        .filter(|name| !name.trim().is_empty())
+        .collect::<Vec<_>>();
+    devices.sort();
+    devices.dedup();
+    devices
+}
+
 pub fn camera_devices() -> Vec<String> {
     Vec::new()
 }
@@ -377,11 +392,21 @@ fn attach_audio_receiver(
     }));
 }
 
-pub fn start_audio_playback(queue: Arc<Mutex<VecDeque<f32>>>) -> Result<AudioPlayback> {
+pub fn start_audio_playback(
+    device_name: &str,
+    queue: Arc<Mutex<VecDeque<f32>>>,
+) -> Result<AudioPlayback> {
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| anyhow!("speaker not found"))?;
+    let device = if device_name == SYSTEM_DEFAULT_DEVICE {
+        host.default_output_device()
+    } else {
+        host.output_devices()
+            .ok()
+            .into_iter()
+            .flatten()
+            .find(|device| device.name().ok().as_deref() == Some(device_name))
+    }
+    .ok_or_else(|| anyhow!("speaker not found"))?;
     let config = device.default_output_config()?;
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => {

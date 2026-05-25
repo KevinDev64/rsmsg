@@ -43,6 +43,7 @@
   "call.outgoing_note": "Сигналинг звонка активен. Передача медиа будет подключена следующим шагом.",
   "call.refresh_devices": "Обновить устройства",
   "call.signaling_ready": "Сигналинг готов",
+  "call.speaker": "Динамик",
   "call.started": "Звонок с @{user} начат",
   "call.system_default": "Системное устройство",
   "call.turn_password": "Пароль TURN",

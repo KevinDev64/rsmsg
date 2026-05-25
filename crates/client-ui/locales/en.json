@@ -43,6 +43,7 @@
   "call.outgoing_note": "Call signaling is active. Media transport will be attached in the next call-media step.",
   "call.refresh_devices": "Refresh devices",
   "call.signaling_ready": "Signaling ready",
+  "call.speaker": "Speaker",
   "call.started": "Call with @{user} started",
   "call.system_default": "System default",
   "call.turn_password": "TURN password",

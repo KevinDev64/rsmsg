@@ -68,6 +68,7 @@ pub struct MessengerApp {
     webrtc_rx: Option<Receiver<WebRtcResult>>,
     active_call: Option<CallState>,
     microphone_devices: Vec<String>,
+    speaker_devices: Vec<String>,
     camera_devices: Vec<String>,
     media_session: Option<media::MediaSession>,
     webrtc_session: Option<media::WebRtcSession>,
@@ -310,6 +311,7 @@ impl MessengerApp {
             webrtc_rx: None,
             active_call: None,
             microphone_devices: media::microphone_devices(),
+            speaker_devices: media::speaker_devices(),
             camera_devices: media::camera_devices(),
             media_session: None,
             webrtc_session: None,
@@ -321,6 +323,7 @@ impl MessengerApp {
 
     fn refresh_media_devices(&mut self) {
         self.microphone_devices = media::microphone_devices();
+        self.speaker_devices = media::speaker_devices();
         self.camera_devices = media::camera_devices();
     }
 
@@ -1063,8 +1066,11 @@ impl MessengerApp {
         match rx.try_recv() {
             Ok(result) => match result.result {
                 Ok((session, action)) => {
-                    self.audio_playback =
-                        media::start_audio_playback(session.playback_queue()).ok();
+                    self.audio_playback = media::start_audio_playback(
+                        &self.settings.speaker,
+                        session.playback_queue(),
+                    )
+                    .ok();
                     self.webrtc_session = Some(session);
                     match action {
                         WebRtcAction::LocalOffer { offer_payload } => {
@@ -2106,6 +2112,26 @@ impl MessengerApp {
                                 }
                             });
                         if self.microphone_devices.is_empty() {
+                            ui.label(&no_devices);
+                        }
+                        ui.label(self.t("call.speaker"));
+                        egui::ComboBox::from_id_salt("speaker_select")
+                            .selected_text(self.media_device_label(&self.settings.speaker))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.settings.speaker,
+                                    media::SYSTEM_DEFAULT_DEVICE.to_string(),
+                                    system_default.clone(),
+                                );
+                                for device in &self.speaker_devices {
+                                    ui.selectable_value(
+                                        &mut self.settings.speaker,
+                                        device.clone(),
+                                        device,
+                                    );
+                                }
+                            });
+                        if self.speaker_devices.is_empty() {
                             ui.label(&no_devices);
                         }
                         ui.label(self.t("call.camera"));
