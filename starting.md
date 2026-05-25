@@ -154,7 +154,21 @@ RSMSG_PROFILE=bob cargo run -p client-ui
 
 Они добавлены в `.gitignore`.
 
-## 11) Локализация клиента
+## 11) Настройки звонков через интернет
+
+В Settings -> Call network можно указать STUN/TURN серверы, по одному в строке.
+По умолчанию используется `stun:stun.l.google.com:19302`.
+Для соединений через строгие NAT/firewall добавьте свой TURN сервер и заполните TURN username/password.
+
+Примеры строк:
+
+```text
+stun:stun.l.google.com:19302
+turn:turn.example.com:3478?transport=udp
+turn:turn.example.com:3478?transport=tcp
+```
+
+## 12) Локализация клиента
 
 UI-тексты клиента лежат в JSON-файлах:
 
@@ -166,7 +180,7 @@ crates/client-ui/locales/ru.json
 Локализаторам не нужно менять Rust-код: достаточно добавить или отредактировать ключи в JSON-файлах.
 Если ключ отсутствует в выбранном языке, клиент использует английский fallback.
 
-## 12) Остановка
+## 13) Остановка
 
 Остановить сервер: `Ctrl+C` в терминале сервера.
 

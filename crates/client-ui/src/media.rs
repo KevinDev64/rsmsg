@@ -14,6 +14,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use webrtc::{
     api::APIBuilder,
     data_channel::{RTCDataChannel, data_channel_message::DataChannelMessage},
+    ice_transport::ice_server::RTCIceServer,
     peer_connection::{
         RTCPeerConnection, configuration::RTCConfiguration,
         sdp::session_description::RTCSessionDescription,
@@ -21,6 +22,13 @@ use webrtc::{
 };
 
 pub const SYSTEM_DEFAULT_DEVICE: &str = "System default";
+
+#[derive(Clone)]
+pub struct IceConfig {
+    pub servers: Vec<String>,
+    pub turn_username: String,
+    pub turn_password: String,
+}
 
 pub fn microphone_devices() -> Vec<String> {
     let host = cpal::default_host();
@@ -82,8 +90,8 @@ impl WebRtcSession {
         self.playback_queue.clone()
     }
 
-    pub async fn create_offer() -> Result<(Self, String)> {
-        let session = Self::new(true).await?;
+    pub async fn create_offer(ice_config: IceConfig) -> Result<(Self, String)> {
+        let session = Self::new(true, ice_config).await?;
         let offer = session.peer_connection.create_offer(None).await?;
         let mut gather_complete = session.peer_connection.gathering_complete_promise().await;
         session.peer_connection.set_local_description(offer).await?;
@@ -96,8 +104,11 @@ impl WebRtcSession {
         Ok((session, serde_json::to_string(&local)?))
     }
 
-    pub async fn create_answer(offer_payload: &str) -> Result<(Self, String)> {
-        let session = Self::new(false).await?;
+    pub async fn create_answer(
+        offer_payload: &str,
+        ice_config: IceConfig,
+    ) -> Result<(Self, String)> {
+        let session = Self::new(false, ice_config).await?;
         let offer = serde_json::from_str::<RTCSessionDescription>(offer_payload)?;
         session
             .peer_connection
@@ -124,9 +135,9 @@ impl WebRtcSession {
         Ok(())
     }
 
-    async fn new(create_data_channel: bool) -> Result<Self> {
+    async fn new(create_data_channel: bool, ice_config: IceConfig) -> Result<Self> {
         let api = APIBuilder::new().build();
-        let peer_connection = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await?);
+        let peer_connection = Arc::new(api.new_peer_connection(rtc_config(ice_config)).await?);
         let status = Arc::new(Mutex::new("WebRTC starting".to_string()));
         let data_channel: Arc<Mutex<Option<Arc<RTCDataChannel>>>> = Arc::new(Mutex::new(None));
         let playback_queue = Arc::new(Mutex::new(VecDeque::<f32>::new()));
@@ -196,6 +207,23 @@ impl WebRtcSession {
             outbound_audio_tx,
             playback_queue,
         })
+    }
+}
+
+fn rtc_config(ice_config: IceConfig) -> RTCConfiguration {
+    let servers = ice_config
+        .servers
+        .into_iter()
+        .filter(|server| !server.trim().is_empty())
+        .map(|server| RTCIceServer {
+            urls: vec![server],
+            username: ice_config.turn_username.clone(),
+            credential: ice_config.turn_password.clone(),
+        })
+        .collect();
+    RTCConfiguration {
+        ice_servers: servers,
+        ..Default::default()
     }
 }
 

@@ -50,6 +50,12 @@ pub struct AppSettings {
     pub microphone: String,
     #[serde(default = "default_media_device")]
     pub camera: String,
+    #[serde(default = "default_ice_servers")]
+    pub ice_servers: String,
+    #[serde(default)]
+    pub turn_username: String,
+    #[serde(default)]
+    pub turn_password: String,
 }
 
 impl AppSettings {
@@ -91,4 +97,8 @@ fn system_language_code() -> &'static str {
 
 fn default_media_device() -> String {
     crate::media::SYSTEM_DEFAULT_DEVICE.to_string()
+}
+
+fn default_ice_servers() -> String {
+    "stun:stun.l.google.com:19302".to_string()
 }

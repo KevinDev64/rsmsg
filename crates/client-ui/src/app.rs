@@ -332,6 +332,21 @@ impl MessengerApp {
         }
     }
 
+    fn ice_config(&self) -> media::IceConfig {
+        media::IceConfig {
+            servers: self
+                .settings
+                .ice_servers
+                .lines()
+                .map(str::trim)
+                .filter(|server| !server.is_empty())
+                .map(ToString::to_string)
+                .collect(),
+            turn_username: self.settings.turn_username.clone(),
+            turn_password: self.settings.turn_password.clone(),
+        }
+    }
+
     fn sync_media_session(&mut self) {
         let Some(call) = self.active_call.as_ref() else {
             self.media_session = None;
@@ -987,10 +1002,11 @@ impl MessengerApp {
         }
         let (tx, rx) = mpsc::channel();
         self.webrtc_rx = Some(rx);
+        let ice_config = self.ice_config();
         thread::spawn(move || {
             let rt = runtime();
             let result = rt
-                .block_on(media::WebRtcSession::create_offer())
+                .block_on(media::WebRtcSession::create_offer(ice_config))
                 .map(|(session, offer_payload)| {
                     (session, WebRtcAction::LocalOffer { offer_payload })
                 })
@@ -1005,10 +1021,14 @@ impl MessengerApp {
         }
         let (tx, rx) = mpsc::channel();
         self.webrtc_rx = Some(rx);
+        let ice_config = self.ice_config();
         thread::spawn(move || {
             let rt = runtime();
             let result = rt
-                .block_on(media::WebRtcSession::create_answer(&offer_payload))
+                .block_on(media::WebRtcSession::create_answer(
+                    &offer_payload,
+                    ice_config,
+                ))
                 .map(|(session, answer_payload)| {
                     (session, WebRtcAction::LocalAnswer { answer_payload })
                 })
@@ -2111,6 +2131,22 @@ impl MessengerApp {
                         if ui.button(self.t("call.refresh_devices")).clicked() {
                             self.refresh_media_devices();
                         }
+
+                        ui.separator();
+                        ui.heading(self.t("call.network"));
+                        ui.label(self.t("call.ice_servers"));
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.settings.ice_servers)
+                                .desired_rows(3)
+                                .hint_text("stun:stun.l.google.com:19302"),
+                        );
+                        ui.label(self.t("call.turn_username"));
+                        ui.text_edit_singleline(&mut self.settings.turn_username);
+                        ui.label(self.t("call.turn_password"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.settings.turn_password)
+                                .password(true),
+                        );
                         self.settings.save();
 
                         ui.separator();
