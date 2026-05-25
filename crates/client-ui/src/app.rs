@@ -27,6 +27,7 @@ use crate::{
 
 const DEFAULT_DEVICE_ID: &str = "main";
 const MAX_FILE_BYTES: usize = 100 * 1024 * 1024;
+const CALL_ANSWER_TIMEOUT: Duration = Duration::from_secs(45);
 
 pub struct MessengerApp {
     core: ClientCore,
@@ -174,6 +175,7 @@ struct CallState {
     incoming: bool,
     accepted: bool,
     signaling_status: String,
+    started_at: Instant,
     last_signal_poll_at: Instant,
 }
 
@@ -979,6 +981,29 @@ impl MessengerApp {
         let Some(call) = self.active_call.as_mut() else {
             return;
         };
+        if !call.incoming && !call.accepted && call.started_at.elapsed() >= CALL_ANSWER_TIMEOUT {
+            let Some(auth) = self.auth.clone() else {
+                return;
+            };
+            let core = self.core.clone();
+            let call_id = call.call_id.clone();
+            let peer_device_uuid = call.peer_device_uuid.clone();
+            thread::spawn(move || {
+                let rt = runtime();
+                let _ = rt.block_on(core.send_call_signal(
+                    &auth,
+                    call_id,
+                    peer_device_uuid,
+                    "hangup".to_string(),
+                    "{}".to_string(),
+                ));
+            });
+            self.active_call = None;
+            self.call_signal_rx = None;
+            self.stop_webrtc_session();
+            self.status = self.t("call.no_answer");
+            return;
+        }
         if call.last_signal_poll_at.elapsed() < Duration::from_millis(1200) {
             return;
         }
@@ -1642,6 +1667,7 @@ impl MessengerApp {
                 incoming: true,
                 accepted: false,
                 signaling_status: self.t("call.incoming_waiting"),
+                started_at: Instant::now(),
                 last_signal_poll_at: Instant::now(),
             });
         }
@@ -2616,6 +2642,7 @@ fn run_start_call_flow(
                 incoming: false,
                 accepted: false,
                 signaling_status: "signaling ready".to_string(),
+                started_at: Instant::now(),
                 last_signal_poll_at: Instant::now(),
             })
         }

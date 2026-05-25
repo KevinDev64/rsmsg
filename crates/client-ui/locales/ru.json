@@ -39,6 +39,7 @@
   "call.network": "Сеть звонков",
   "call.ice_servers": "STUN/TURN серверы, по одному в строке",
   "call.mute_microphone": "Отключить микрофон",
+  "call.no_answer": "Нет ответа. Звонок завершён.",
   "call.no_devices_found": "Устройства не найдены",
   "call.outgoing_note": "Сигналинг звонка активен. Передача медиа будет подключена следующим шагом.",
   "call.refresh_devices": "Обновить устройства",

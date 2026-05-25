@@ -39,6 +39,7 @@
   "call.network": "Call network",
   "call.ice_servers": "STUN/TURN servers, one per line",
   "call.mute_microphone": "Mute microphone",
+  "call.no_answer": "No answer. Call ended.",
   "call.no_devices_found": "No devices found",
   "call.outgoing_note": "Call signaling is active. Media transport will be attached in the next call-media step.",
   "call.refresh_devices": "Refresh devices",
