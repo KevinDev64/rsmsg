@@ -1122,6 +1122,7 @@ dependencies = [
  "cpal",
  "eframe",
  "egui",
+ "image",
  "nokhwa",
  "notify-rust",
  "openh264",

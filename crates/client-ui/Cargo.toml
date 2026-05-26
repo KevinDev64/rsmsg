@@ -11,6 +11,7 @@ client-core = { path = "../client-core" }
 cpal.workspace = true
 eframe.workspace = true
 egui.workspace = true
+image.workspace = true
 notify-rust.workspace = true
 nokhwa.workspace = true
 opus.workspace = true

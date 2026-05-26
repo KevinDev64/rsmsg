@@ -27,6 +27,7 @@ eframe = "0.33"
 egui = "0.33"
 futures-util = "0.3"
 hkdf = "0.12"
+image = { version = "0.25", default-features = false, features = ["png"] }
 rand = "0.8"
 notify-rust = "4"
 nokhwa = { version = "0.10", default-features = false, features = ["decoding", "input-native"] }
