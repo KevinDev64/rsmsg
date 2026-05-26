@@ -1,0 +1,66 @@
+services:
+  server:
+    build:
+      context: ../..
+      dockerfile: crates/server/Dockerfile
+    image: rsmsg-server:latest
+    container_name: rsmsg-server
+    restart: unless-stopped
+    env_file:
+      - ${RSMSG_ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      SERVER_ADDR: 0.0.0.0:3000
+      RUST_LOG: ${RUST_LOG:-server=info,tower_http=info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${RSMSG_HTTP_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16
+    container_name: rsmsg-postgres
+    restart: unless-stopped
+    env_file:
+      - ${RSMSG_ENV_FILE:-.env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  coturn:
+    image: coturn/coturn:4
+    container_name: rsmsg-coturn
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ${RSMSG_ENV_FILE:-.env}
+    command:
+      - --listening-port=3478
+      - --realm=${TURN_REALM}
+      - --server-name=${TURN_REALM}
+      - --user=${TURN_USER}:${TURN_PASSWORD}
+      - --min-port=${TURN_MIN_PORT:-49160}
+      - --max-port=${TURN_MAX_PORT:-49200}
+      - --external-ip=${TURN_EXTERNAL_IP}
+      - --fingerprint
+      - --lt-cred-mech
+      - --no-multicast-peers
+      - --no-cli
+      - --log-file=stdout
+    profiles:
+      - turn
+
+volumes:
+  postgres_data:

@@ -1,0 +1,7 @@
+target
+.git
+.rsmsg_*
+deploy/.env
+deploy/prod/.env
+crates/client-ui/assets/.DS_Store
+*.log
