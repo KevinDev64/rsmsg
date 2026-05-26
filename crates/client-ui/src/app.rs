@@ -76,7 +76,15 @@ pub struct MessengerApp {
     webrtc_session: Option<media::WebRtcSession>,
     audio_playback: Option<media::AudioPlayback>,
     media_failed_call_id: Option<String>,
+    local_video_texture: Option<CachedVideoTexture>,
+    remote_video_texture: Option<CachedVideoTexture>,
     last_sync_at: Instant,
+}
+
+struct CachedVideoTexture {
+    frames: u64,
+    size: [usize; 2],
+    texture: egui::TextureHandle,
 }
 
 struct LoginResult {
@@ -321,6 +329,8 @@ impl MessengerApp {
             webrtc_session: None,
             audio_playback: None,
             media_failed_call_id: None,
+            local_video_texture: None,
+            remote_video_texture: None,
             last_sync_at: Instant::now(),
         }
     }
@@ -1197,6 +1207,8 @@ impl MessengerApp {
     fn stop_webrtc_session(&mut self) {
         self.webrtc_rx = None;
         self.audio_playback = None;
+        self.local_video_texture = None;
+        self.remote_video_texture = None;
         if let Some(session) = self.webrtc_session.take() {
             thread::spawn(move || {
                 let rt = runtime();
@@ -2399,6 +2411,12 @@ impl MessengerApp {
             .webrtc_session
             .as_ref()
             .and_then(media::WebRtcSession::remote_video);
+        let local_video_texture = video_info.as_ref().and_then(|info| {
+            video_texture(ctx, &mut self.local_video_texture, "local-video", info)
+        });
+        let remote_video_texture = remote_video_info.as_ref().and_then(|info| {
+            video_texture(ctx, &mut self.remote_video_texture, "remote-video", info)
+        });
         let mut microphone_muted = call.microphone_muted;
         let mut camera_disabled = call.camera_disabled;
         ctx.input(|input| {
@@ -2459,20 +2477,8 @@ impl MessengerApp {
                             ("frames", &info.frames.to_string()),
                         ],
                     ));
-                    if !info.rgb.is_empty() {
-                        let image = egui::ColorImage::from_rgb(
-                            [info.width as usize, info.height as usize],
-                            &info.rgb,
-                        );
-                        let texture = ctx.load_texture(
-                            format!("local-video-{}", info.frames),
-                            image,
-                            egui::TextureOptions::LINEAR,
-                        );
-                        ui.image((
-                            texture.id(),
-                            egui::vec2(info.width as f32, info.height as f32),
-                        ));
+                    if let Some((texture_id, size)) = local_video_texture {
+                        ui.image((texture_id, size));
                     }
                 }
                 if let Some(info) = remote_video_info {
@@ -2484,20 +2490,8 @@ impl MessengerApp {
                             ("frames", &info.frames.to_string()),
                         ],
                     ));
-                    if !info.rgb.is_empty() {
-                        let image = egui::ColorImage::from_rgb(
-                            [info.width as usize, info.height as usize],
-                            &info.rgb,
-                        );
-                        let texture = ctx.load_texture(
-                            format!("remote-video-{}", info.frames),
-                            image,
-                            egui::TextureOptions::LINEAR,
-                        );
-                        ui.image((
-                            texture.id(),
-                            egui::vec2(info.width as f32, info.height as f32),
-                        ));
+                    if let Some((texture_id, size)) = remote_video_texture {
+                        ui.image((texture_id, size));
                     }
                 }
                 if accepted && !microphone_muted {
@@ -2632,6 +2626,41 @@ impl MessengerApp {
         let signing = self.history.peer_signing_identity_key_by_peer.get(peer)?;
         Some(format_safety_number(&[identity, signing]))
     }
+}
+
+fn video_texture(
+    ctx: &egui::Context,
+    cache: &mut Option<CachedVideoTexture>,
+    name: &str,
+    info: &media::VideoFrameInfo,
+) -> Option<(egui::TextureId, egui::Vec2)> {
+    let size = [info.width as usize, info.height as usize];
+    if info.rgb.is_empty() || size[0] == 0 || size[1] == 0 {
+        return None;
+    }
+    if cache
+        .as_ref()
+        .is_some_and(|cached| cached.frames == info.frames && cached.size == size)
+    {
+        let texture = &cache.as_ref()?.texture;
+        return Some((texture.id(), egui::vec2(size[0] as f32, size[1] as f32)));
+    }
+    let image = egui::ColorImage::from_rgb(size, &info.rgb);
+    match cache.as_mut() {
+        Some(cached) if cached.size == size => {
+            cached.texture.set(image, egui::TextureOptions::LINEAR);
+            cached.frames = info.frames;
+        }
+        _ => {
+            *cache = Some(CachedVideoTexture {
+                frames: info.frames,
+                size,
+                texture: ctx.load_texture(name.to_string(), image, egui::TextureOptions::LINEAR),
+            });
+        }
+    }
+    let texture = &cache.as_ref()?.texture;
+    Some((texture.id(), egui::vec2(size[0] as f32, size[1] as f32)))
 }
 
 fn format_safety_number(parts: &[&str]) -> String {

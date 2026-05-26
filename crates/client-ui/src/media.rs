@@ -27,7 +27,7 @@ use opus::{Application, Channels, Decoder, Encoder};
 use webrtc::{
     api::{
         APIBuilder,
-        media_engine::{MIME_TYPE_H264, MIME_TYPE_OPUS},
+        media_engine::{MIME_TYPE_H264, MIME_TYPE_OPUS, MediaEngine},
     },
     data_channel::{RTCDataChannel, data_channel_message::DataChannelMessage},
     ice_transport::ice_server::RTCIceServer,
@@ -246,7 +246,9 @@ impl WebRtcSession {
     }
 
     async fn new(create_data_channel: bool, ice_config: IceConfig) -> Result<Self> {
-        let api = APIBuilder::new().build();
+        let mut media_engine = MediaEngine::default();
+        media_engine.register_default_codecs()?;
+        let api = APIBuilder::new().with_media_engine(media_engine).build();
         let peer_connection = Arc::new(api.new_peer_connection(rtc_config(ice_config)).await?);
         let status = Arc::new(Mutex::new("WebRTC starting".to_string()));
         let data_channel: Arc<Mutex<Option<Arc<RTCDataChannel>>>> = Arc::new(Mutex::new(None));
