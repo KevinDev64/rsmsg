@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{HeaderMap, HeaderValue};
 use shared::{
@@ -234,14 +234,22 @@ impl ApiTransport {
     ) -> Result<FetchPrekeyBundleResponse> {
         let url = format!("{}/v1/fetch_prekey_bundle", self.cfg.http_base);
         let req = FetchPrekeyBundleRequest { user_id, device_id };
-        let response = self.client.post(url).json(&req).send().await?;
+        let response = self
+            .client
+            .post(&url)
+            .json(&req)
+            .send()
+            .await
+            .with_context(|| format!("request failed: POST {url}"))?;
         if !response.status().is_success() {
-            return Err(anyhow!(
-                "fetch_prekey_bundle failed with {}",
-                response.status()
-            ));
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(api_error_message(status, body)));
         }
-        Ok(response.json().await?)
+        Ok(response
+            .json()
+            .await
+            .with_context(|| format!("invalid response: POST {url}"))?)
     }
 
     pub async fn resolve_user(
