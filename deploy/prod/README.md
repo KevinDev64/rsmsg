@@ -6,6 +6,7 @@ Files:
 - `docker-compose.yml`: server, Postgres, optional Coturn profile.
 - `.env.example`: production environment template.
 - `nginx.conf.example`: reverse proxy location/server template for `rsmsg.kevindev64.ru` and certbot-managed TLS.
+- Default server host port: `127.0.0.1:4222`.
 
 Useful commands:
 - Build/start server and Postgres: `docker compose -f deploy/prod/docker-compose.yml --env-file deploy/prod/.env up -d --build`
