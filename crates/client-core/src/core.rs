@@ -303,6 +303,18 @@ impl ClientCore {
         sent
     }
 
+    pub async fn send_contact_to_peer_with_id(
+        &self,
+        auth: &DeviceAuth,
+        peer_device_uuid: String,
+        message_id: String,
+    ) -> Result<bool> {
+        let payload = EncryptedMessagePayload::Contact { v: 1 };
+        let plaintext = serde_json::to_string(&payload)?;
+        self.send_text_to_peer_with_id(auth, peer_device_uuid, plaintext, message_id)
+            .await
+    }
+
     pub async fn send_file_to_peer_with_id(
         &self,
         auth: &DeviceAuth,

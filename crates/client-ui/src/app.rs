@@ -551,7 +551,7 @@ impl MessengerApp {
         if self.open_chat_rx.is_some() {
             return;
         }
-        let Some(_auth) = self.auth.clone() else {
+        let Some(auth) = self.auth.clone() else {
             self.status = self.t("error.log_in_first");
             return;
         };
@@ -569,7 +569,7 @@ impl MessengerApp {
         self.status = format!("Opening chat with @{peer}...");
         let core = self.core.clone();
         thread::spawn(move || {
-            let result = run_open_chat_flow(core, local_keys, peer);
+            let result = run_open_chat_flow(core, auth, local_keys, peer);
             let _ = tx.send(OpenChatResult { result });
         });
     }
@@ -1650,6 +1650,21 @@ impl MessengerApp {
 
     fn push_incoming(&mut self, msg: DecryptedMessage) {
         let payload = serde_json::from_str::<EncryptedMessagePayload>(&msg.plaintext).ok();
+        if matches!(payload, Some(EncryptedMessagePayload::Contact { .. })) {
+            let nick = self
+                .history
+                .peer_by_device_uuid
+                .get(&msg.from_device_uuid)
+                .cloned()
+                .unwrap_or_else(|| {
+                    format!(
+                        "unknown:{}",
+                        &msg.from_device_uuid[..8.min(msg.from_device_uuid.len())]
+                    )
+                });
+            self.history.chats.entry(nick).or_default();
+            return;
+        }
         let (text, file_name, file_size, file_data_b64, blob_id, file_key_b64, incoming_call) =
             match payload {
                 Some(EncryptedMessagePayload::File {
@@ -1681,6 +1696,7 @@ impl MessengerApp {
                     None,
                     Some((call_id, video)),
                 ),
+                Some(EncryptedMessagePayload::Contact { .. }) => return,
                 None => (msg.plaintext, None, None, None, None, None, None),
             };
         let nick = self
@@ -2746,6 +2762,7 @@ fn run_login_flow(
 
 fn run_open_chat_flow(
     core: ClientCore,
+    auth: DeviceAuth,
     local_keys: LocalDeviceKeys,
     peer: String,
 ) -> Result<OpenChatSuccess, String> {
@@ -2760,6 +2777,16 @@ fn run_open_chat_flow(
             DEFAULT_DEVICE_ID.to_string(),
         ))
         .map_err(|err| format!("Open chat failed: {err}"))?;
+    let contact_sent = rt
+        .block_on(core.send_contact_to_peer_with_id(
+            &auth,
+            bundle.device_uuid.clone(),
+            Uuid::new_v4().to_string(),
+        ))
+        .map_err(|err| format!("Open chat failed: {err}"))?;
+    if !contact_sent {
+        return Err("Open chat failed: peer session missing".to_string());
+    }
     Ok(OpenChatSuccess {
         peer,
         resolved_uuid,

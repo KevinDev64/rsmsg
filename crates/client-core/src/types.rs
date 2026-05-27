@@ -70,6 +70,8 @@ pub struct OutgoingMessageStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum EncryptedMessagePayload {
+    #[serde(rename = "contact")]
+    Contact { v: u8 },
     #[serde(rename = "file")]
     File {
         v: u8,
