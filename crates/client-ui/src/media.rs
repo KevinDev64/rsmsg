@@ -30,7 +30,10 @@ use webrtc::{
         APIBuilder,
         media_engine::{MIME_TYPE_H264, MIME_TYPE_OPUS, MediaEngine},
     },
-    data_channel::{RTCDataChannel, data_channel_message::DataChannelMessage},
+    data_channel::{
+        RTCDataChannel, data_channel_message::DataChannelMessage,
+        data_channel_state::RTCDataChannelState,
+    },
     ice_transport::ice_server::RTCIceServer,
     peer_connection::{
         RTCPeerConnection, configuration::RTCConfiguration,
@@ -334,6 +337,7 @@ impl WebRtcSession {
             }
         });
         let video_track_for_sender = video_track.clone();
+        let data_channel_for_video = data_channel.clone();
         let status_for_video = status.clone();
         thread::spawn(move || {
             let Ok(rt) = tokio::runtime::Runtime::new() else {
@@ -365,6 +369,22 @@ impl WebRtcSession {
                             {
                                 *status_for_video.lock().expect("webrtc_status") =
                                     "WebRTC video track send failed".to_string();
+                            }
+                            if let Some(channel) = data_channel_for_video
+                                .lock()
+                                .expect("webrtc_data_channel")
+                                .clone()
+                                .filter(|channel| {
+                                    channel.ready_state() == RTCDataChannelState::Open
+                                })
+                            {
+                                let payload = encode_h264_video_frame(
+                                    frame.width,
+                                    frame.height,
+                                    frame.frames,
+                                    bitstream.to_vec(),
+                                );
+                                let _ = rt.block_on(channel.send(&Bytes::from(payload)));
                             }
                         }
                         Err(err) => {
@@ -804,8 +824,12 @@ fn attach_data_receiver(
     remote_video: Arc<Mutex<Option<VideoFrameInfo>>>,
     status: Arc<Mutex<String>>,
 ) {
+    let h264_decoder = Arc::new(Mutex::new(H264Decoder::new().ok()));
     channel.on_message(Box::new(move |message: DataChannelMessage| {
+        let mut decoder = h264_decoder.lock().expect("h264_data_decoder");
         if let Some(frame) = decode_video_frame(&message.data) {
+            *remote_video.lock().expect("remote_video") = Some(frame);
+        } else if let Some(frame) = decode_h264_video_frame(&message.data, decoder.as_mut()) {
             *remote_video.lock().expect("remote_video") = Some(frame);
         } else if let Some(samples) = decode_audio_frame(&message.data) {
             let mut queue = playback_queue.lock().expect("audio_playback_queue");
@@ -924,12 +948,13 @@ where
     T: cpal::SizedSample + OutputSample,
 {
     let mut playing = false;
+    let channels = config.channels as usize;
     Ok(device.build_output_stream(
         &config,
         move |out: &mut [T], _| {
-            let output_len = out.len();
+            let output_frames = out.len() / channels.max(1);
             let mut queue = queue.lock().expect("audio_playback_queue");
-            for sample in out.iter_mut() {
+            for frame in out.chunks_mut(channels.max(1)) {
                 if !playing && queue.len() >= PLAYBACK_BUFFER_START {
                     playing = true;
                 }
@@ -939,7 +964,7 @@ where
                 while queue.len() > PLAYBACK_BUFFER_MAX {
                     queue.pop_front();
                 }
-                while queue.len() > PLAYBACK_BUFFER_TARGET + output_len {
+                while queue.len() > PLAYBACK_BUFFER_TARGET + output_frames {
                     queue.pop_front();
                 }
                 let value = if playing {
@@ -947,7 +972,9 @@ where
                 } else {
                     0.0
                 };
-                *sample = T::from_f32(value);
+                for sample in frame {
+                    *sample = T::from_f32(value);
+                }
             }
         },
         move |_| {},
@@ -1012,6 +1039,47 @@ fn decode_video_frame(payload: &[u8]) -> Option<VideoFrameInfo> {
         height,
         frames,
         rgb: payload[20..].to_vec(),
+    })
+}
+
+fn encode_h264_video_frame(width: u32, height: u32, frames: u64, h264: Vec<u8>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(20 + h264.len());
+    out.extend_from_slice(b"RSH1");
+    out.extend_from_slice(&width.to_le_bytes());
+    out.extend_from_slice(&height.to_le_bytes());
+    out.extend_from_slice(&frames.to_le_bytes());
+    out.extend_from_slice(&h264);
+    out
+}
+
+fn decode_h264_video_frame(
+    payload: &[u8],
+    decoder: Option<&mut H264Decoder>,
+) -> Option<VideoFrameInfo> {
+    if payload.len() < 20 || &payload[..4] != b"RSH1" {
+        return None;
+    }
+    let decoder = decoder?;
+    let width = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+    let height = u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]);
+    let frames = u64::from_le_bytes([
+        payload[12],
+        payload[13],
+        payload[14],
+        payload[15],
+        payload[16],
+        payload[17],
+        payload[18],
+        payload[19],
+    ]);
+    let decoded = decoder.decode(&payload[20..]).ok().flatten()?;
+    let mut rgb = vec![0_u8; decoded.rgb8_len()];
+    decoded.write_rgb8(&mut rgb);
+    Some(VideoFrameInfo {
+        width,
+        height,
+        frames,
+        rgb,
     })
 }
 
