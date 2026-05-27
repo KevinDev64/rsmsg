@@ -54,8 +54,8 @@ const OPUS_SAMPLE_RATE: u32 = 48_000;
 const OPUS_FRAME_SAMPLES: usize = 960;
 const OPUS_MAX_PACKET_BYTES: usize = 1275;
 const VIDEO_CLOCK_RATE: u32 = 90_000;
-const VIDEO_FRAME_DURATION: Duration = Duration::from_millis(333);
-const CAMERA_FRAME_INTERVAL: Duration = Duration::from_millis(100);
+const VIDEO_FRAME_DURATION: Duration = Duration::from_millis(42);
+const CAMERA_FRAME_INTERVAL: Duration = Duration::from_millis(42);
 
 #[derive(Clone)]
 pub struct IceConfig {

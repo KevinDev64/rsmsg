@@ -1038,6 +1038,9 @@ impl MessengerApp {
                         }
                     }
                     Err(err) => {
+                        if err.contains("error sending request") {
+                            return;
+                        }
                         let localized = self.localize_status_error(&err);
                         if let Some(call) = self.active_call.as_mut() {
                             call.signaling_status = localized;
@@ -1806,7 +1809,11 @@ impl eframe::App for MessengerApp {
         self.poll_webrtc_result();
         self.sync_media_session();
         self.sync_video_session();
-        ctx.request_repaint_after(Duration::from_millis(800));
+        if self.active_call.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(42));
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(800));
+        }
         if self.auth.is_some() && self.last_sync_at.elapsed() >= Duration::from_secs(2) {
             self.sync_incoming();
         }
@@ -2476,14 +2483,38 @@ impl MessengerApp {
         let accept_label = self.t("call.accept");
         let decline_label = self.t("call.decline");
         let media_active_label = self.t("call.media_active");
+        let microphone_inactive_label = self.t("call.microphone_inactive");
         let local_speaking_label = self.t("call.local_speaking");
         let remote_speaking_label = self.t("call.remote_speaking");
+        let local_video_label = self.t("call.local_video");
+        let remote_video_label = self.t("call.remote_video");
+        let local_video_empty_label = self.t("call.local_video_empty");
+        let remote_video_empty_label = self.t("call.remote_video_empty");
         let hang_up_label = self.t("call.hang_up");
+        let local_video_status = video_info.as_ref().map(|info| {
+            self.tf(
+                "call.local_video_status",
+                &[
+                    ("width", &info.width.to_string()),
+                    ("height", &info.height.to_string()),
+                    ("frames", &info.frames.to_string()),
+                ],
+            )
+        });
+        let remote_video_status = remote_video_info.as_ref().map(|info| {
+            self.tf(
+                "call.remote_video_status",
+                &[
+                    ("width", &info.width.to_string()),
+                    ("height", &info.height.to_string()),
+                    ("frames", &info.frames.to_string()),
+                ],
+            )
+        });
         egui::Window::new(title)
             .collapsible(false)
-            .resizable(true)
-            .default_width(420.0)
-            .default_height(260.0)
+            .resizable(false)
+            .fixed_size(egui::vec2(760.0, 560.0))
             .show(ctx, |ui| {
                 ui.heading(format!("@{peer}"));
                 ui.label(active_label);
@@ -2496,38 +2527,38 @@ impl MessengerApp {
                 if let Some(status) = video_status {
                     ui.label(status);
                 }
-                if let Some(info) = video_info {
-                    ui.label(self.tf(
-                        "call.local_video_status",
-                        &[
-                            ("width", &info.width.to_string()),
-                            ("height", &info.height.to_string()),
-                            ("frames", &info.frames.to_string()),
-                        ],
-                    ));
-                    if let Some((texture_id, size)) = local_video_texture {
-                        ui.image((texture_id, size));
-                    }
-                }
-                if let Some(info) = remote_video_info {
-                    ui.label(self.tf(
-                        "call.remote_video_status",
-                        &[
-                            ("width", &info.width.to_string()),
-                            ("height", &info.height.to_string()),
-                            ("frames", &info.frames.to_string()),
-                        ],
-                    ));
-                    if let Some((texture_id, size)) = remote_video_texture {
-                        ui.image((texture_id, size));
-                    }
-                }
+                ui.horizontal(|ui| {
+                    ui.allocate_ui(egui::vec2(360.0, 300.0), |ui| {
+                        ui.heading(local_video_label);
+                        if let Some(status) = local_video_status.as_ref() {
+                            ui.label(status);
+                        } else {
+                            ui.label(&local_video_empty_label);
+                        }
+                        if let Some((texture_id, _)) = local_video_texture {
+                            ui.image((texture_id, egui::vec2(340.0, 255.0)));
+                        }
+                    });
+                    ui.allocate_ui(egui::vec2(360.0, 300.0), |ui| {
+                        ui.heading(remote_video_label);
+                        if let Some(status) = remote_video_status.as_ref() {
+                            ui.label(status);
+                        } else {
+                            ui.label(&remote_video_empty_label);
+                        }
+                        if let Some((texture_id, _)) = remote_video_texture {
+                            ui.image((texture_id, egui::vec2(340.0, 255.0)));
+                        }
+                    });
+                });
                 if accepted && !microphone_muted {
                     ui.label(media_active_label);
                     ui.add(egui::ProgressBar::new(microphone_level).show_percentage());
                     if microphone_level > 0.05 {
                         ui.label(local_speaking_label);
                     }
+                } else {
+                    ui.label(microphone_inactive_label);
                 }
                 if accepted && remote_audio_level > 0.03 {
                     ui.label(remote_speaking_label);
