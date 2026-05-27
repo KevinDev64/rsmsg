@@ -10,7 +10,7 @@ Files:
 Useful commands:
 - Build/start server and Postgres: `docker compose -f deploy/prod/docker-compose.yml --env-file deploy/prod/.env up -d --build`
 - Start optional TURN: `docker compose -f deploy/prod/docker-compose.yml --env-file deploy/prod/.env --profile turn up -d coturn`
-- Run migrations from host: `DATABASE_URL=postgres://rsmsg:<password>@127.0.0.1:<postgres_port>/rsmsg sqlx migrate run --source crates/server/migrations`
+- Run migrations from host: `DATABASE_URL=postgres://rsmsg:<password>@127.0.0.1:5442/rsmsg sqlx migrate run --source crates/server/migrations`
 - Generate invite in container: `docker compose -f deploy/prod/docker-compose.yml --env-file deploy/prod/.env exec server /app/generate_invite`
 
 Client server URL:
