@@ -1,4 +1,5 @@
 /target
+/dist
 .DS_Store
 deploy/.env
 .rsmsg_local_keys.json
