@@ -277,7 +277,11 @@ impl MessengerApp {
     pub fn new() -> Self {
         let settings = AppSettings::load();
         let localization = Localization::load(settings.language.code());
-        let config = ClientConfig::local_default();
+        let config = if settings.server_url.trim().is_empty() {
+            ClientConfig::local_default()
+        } else {
+            ClientConfig::for_server(&settings.server_url)
+        };
         let server_input = config.http_base.clone();
         let core = ClientCore::new(config);
         let nickname = settings.default_username.clone();
@@ -529,6 +533,17 @@ impl MessengerApp {
         self.server_input = config.http_base.clone();
         self.core = ClientCore::new(config);
         self.local_keys = None;
+    }
+
+    fn save_server_config(&mut self) {
+        let config = ClientConfig::for_server(&self.server_input);
+        self.server_input = config.http_base.clone();
+        self.settings.server_url = self.server_input.clone();
+        self.settings.save();
+        if self.auth.is_none() {
+            self.apply_server_config();
+        }
+        self.status = self.t("connection.server_saved");
     }
 
     fn logout(&mut self) {
@@ -2187,6 +2202,9 @@ impl MessengerApp {
                         ui.heading(self.t("connection.title"));
                         ui.label(self.t("connection.server"));
                         ui.text_edit_singleline(&mut self.server_input);
+                        if ui.button(self.t("connection.save_server")).clicked() {
+                            self.save_server_config();
+                        }
                         if self.auth.is_some() {
                             if ui.button(self.t("connection.apply_after_logout")).clicked() {
                                 self.logout();

@@ -46,6 +46,8 @@ pub struct AppSettings {
     pub language: AppLanguage,
     #[serde(default)]
     pub default_username: String,
+    #[serde(default)]
+    pub server_url: String,
     #[serde(default = "default_media_device")]
     pub microphone: String,
     #[serde(default = "default_media_device")]
