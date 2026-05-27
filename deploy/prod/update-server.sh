@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 ENV_FILE="$SCRIPT_DIR/.env"
+SQLX_BIN="${SQLX_BIN:-$HOME/.cargo/bin/sqlx}"
 
 echo "rsmsg server update started"
 
@@ -26,6 +27,7 @@ echo "using compose file: $COMPOSE_FILE"
 echo "using env file: $ENV_FILE"
 echo "postgres host port: $POSTGRES_PORT"
 echo "server host port: $RSMSG_HTTP_PORT"
+echo "sqlx binary: $SQLX_BIN"
 
 echo "starting postgres"
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d postgres
@@ -34,12 +36,12 @@ echo "waiting for postgres"
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 echo "running migrations"
-if ! command -v sqlx >/dev/null 2>&1; then
-  echo "sqlx command not found on host"
-  echo "install sqlx-cli or run migrations manually"
+if [ ! -x "$SQLX_BIN" ]; then
+  echo "sqlx binary not found or not executable: $SQLX_BIN"
+  echo "set SQLX_BIN or install sqlx-cli into ~/.cargo/bin/sqlx"
   exit 1
 fi
-DATABASE_URL="$DATABASE_URL" sqlx migrate run --source "$ROOT_DIR/crates/server/migrations"
+DATABASE_URL="$DATABASE_URL" "$SQLX_BIN" migrate run --source "$ROOT_DIR/crates/server/migrations"
 
 echo "building and restarting server"
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --build server

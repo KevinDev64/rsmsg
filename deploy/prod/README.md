@@ -6,7 +6,7 @@ Files:
 - `docker-compose.yml`: server, Postgres, optional Coturn profile.
 - `.env.example`: production environment template.
 - `nginx.conf.example`: reverse proxy location/server template for `rsmsg.kevindev64.ru` and certbot-managed TLS.
-- `update-server.sh`: starts Postgres, runs migrations, rebuilds/restarts server, checks health.
+- `update-server.sh`: starts Postgres, runs migrations through `~/.cargo/bin/sqlx`, rebuilds/restarts server, checks health.
 - `update-with-turn.sh`: runs server update and starts Coturn profile.
 - `generate-invite.sh`: generates an invite through the server container.
 - `logs.sh`: follows logs for `server` by default, or for the service passed as the first argument.
