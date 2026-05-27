@@ -2482,14 +2482,12 @@ impl MessengerApp {
         let disable_camera_label = self.t("call.disable_camera");
         let accept_label = self.t("call.accept");
         let decline_label = self.t("call.decline");
-        let media_active_label = self.t("call.media_active");
         let microphone_inactive_label = self.t("call.microphone_inactive");
         let local_speaking_label = self.t("call.local_speaking");
         let remote_speaking_label = self.t("call.remote_speaking");
+        let remote_audio_inactive_label = self.t("call.remote_audio_inactive");
         let local_video_label = self.t("call.local_video");
         let remote_video_label = self.t("call.remote_video");
-        let local_video_empty_label = self.t("call.local_video_empty");
-        let remote_video_empty_label = self.t("call.remote_video_empty");
         let hang_up_label = self.t("call.hang_up");
         let local_video_status = video_info.as_ref().map(|info| {
             self.tf(
@@ -2511,98 +2509,141 @@ impl MessengerApp {
                 ],
             )
         });
-        egui::Window::new(title)
-            .collapsible(false)
-            .resizable(false)
-            .fixed_size(egui::vec2(760.0, 560.0))
-            .show(ctx, |ui| {
-                ui.heading(format!("@{peer}"));
-                ui.label(active_label);
-                ui.label(id_label);
-                ui.label(note_label);
-                ui.label(signaling_status);
-                if let Some(status) = webrtc_status {
-                    ui.label(status);
+        let call_window_size = if video {
+            egui::vec2(760.0, 560.0)
+        } else {
+            egui::vec2(480.0, 300.0)
+        };
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("rsmsg-call-window"),
+            egui::ViewportBuilder::default()
+                .with_title(title)
+                .with_inner_size(call_window_size)
+                .with_resizable(false),
+            |ctx, _| {
+                if ctx.input(|input| input.viewport().close_requested()) {
+                    end_call = true;
                 }
-                if let Some(status) = video_status {
-                    ui.label(status);
-                }
-                ui.horizontal(|ui| {
-                    ui.allocate_ui(egui::vec2(360.0, 300.0), |ui| {
-                        ui.heading(local_video_label);
-                        if let Some(status) = local_video_status.as_ref() {
-                            ui.label(status);
-                        } else {
-                            ui.label(&local_video_empty_label);
-                        }
-                        if let Some((texture_id, _)) = local_video_texture {
-                            ui.image((texture_id, egui::vec2(340.0, 255.0)));
-                        }
-                    });
-                    ui.allocate_ui(egui::vec2(360.0, 300.0), |ui| {
-                        ui.heading(remote_video_label);
-                        if let Some(status) = remote_video_status.as_ref() {
-                            ui.label(status);
-                        } else {
-                            ui.label(&remote_video_empty_label);
-                        }
-                        if let Some((texture_id, _)) = remote_video_texture {
-                            ui.image((texture_id, egui::vec2(340.0, 255.0)));
-                        }
-                    });
-                });
-                if accepted && !microphone_muted {
-                    ui.label(media_active_label);
-                    ui.add(egui::ProgressBar::new(microphone_level).show_percentage());
-                    if microphone_level > 0.05 {
-                        ui.label(local_speaking_label);
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.heading(format!("@{peer}"));
+                    ui.label(&active_label);
+                    ui.label(&id_label);
+                    ui.label(&note_label);
+                    ui.label(&signaling_status);
+                    if let Some(status) = webrtc_status.as_ref() {
+                        ui.label(status);
                     }
-                } else {
-                    ui.label(microphone_inactive_label);
-                }
-                if accepted && remote_audio_level > 0.03 {
-                    ui.label(remote_speaking_label);
-                }
-                ui.separator();
-                if incoming && !accepted {
-                    ui.horizontal(|ui| {
-                        if ui.button(accept_label).clicked() {
-                            accept_call = true;
-                        }
-                        if ui.button(decline_label).clicked() {
-                            decline_call = true;
-                        }
-                    });
+                    if video && let Some(status) = video_status.as_ref() {
+                        ui.label(status);
+                    }
+                    if video {
+                        ui.horizontal(|ui| {
+                            ui.allocate_ui(egui::vec2(360.0, 300.0), |ui| {
+                                ui.vertical_centered(|ui| {
+                                    ui.heading(&local_video_label);
+                                    if let Some(status) = local_video_status.as_ref() {
+                                        ui.label(status);
+                                    }
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(340.0, 255.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter()
+                                        .rect_filled(rect, 8.0, egui::Color32::DARK_GRAY);
+                                    if let Some((texture_id, _)) = local_video_texture {
+                                        ui.painter().image(
+                                            texture_id,
+                                            rect,
+                                            egui::Rect::from_min_max(
+                                                egui::Pos2::new(0.0, 0.0),
+                                                egui::Pos2::new(1.0, 1.0),
+                                            ),
+                                            egui::Color32::WHITE,
+                                        );
+                                    }
+                                });
+                            });
+                            ui.allocate_ui(egui::vec2(360.0, 300.0), |ui| {
+                                ui.vertical_centered(|ui| {
+                                    ui.heading(&remote_video_label);
+                                    if let Some(status) = remote_video_status.as_ref() {
+                                        ui.label(status);
+                                    }
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(340.0, 255.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter()
+                                        .rect_filled(rect, 8.0, egui::Color32::DARK_GRAY);
+                                    if let Some((texture_id, _)) = remote_video_texture {
+                                        ui.painter().image(
+                                            texture_id,
+                                            rect,
+                                            egui::Rect::from_min_max(
+                                                egui::Pos2::new(0.0, 0.0),
+                                                egui::Pos2::new(1.0, 1.0),
+                                            ),
+                                            egui::Color32::WHITE,
+                                        );
+                                    }
+                                });
+                            });
+                        });
+                    }
+                    if accepted && !microphone_muted {
+                        ui.add(egui::ProgressBar::new(microphone_level).show_percentage());
+                        ui.label(&local_speaking_label);
+                    } else {
+                        ui.label(&microphone_inactive_label);
+                    }
+                    if accepted && remote_audio_level > 0.03 {
+                        ui.label(&remote_speaking_label);
+                    } else {
+                        ui.label(&remote_audio_inactive_label);
+                    }
                     ui.separator();
-                }
-                ui.horizontal(|ui| {
-                    let mic_label = if microphone_muted {
-                        unmute_label
-                    } else {
-                        mute_label
-                    };
-                    if ui
-                        .add_enabled(accepted, egui::Button::new(mic_label))
-                        .clicked()
-                    {
-                        microphone_muted = !microphone_muted;
+                    if incoming && !accepted {
+                        ui.horizontal(|ui| {
+                            if ui.button(&accept_label).clicked() {
+                                accept_call = true;
+                            }
+                            if ui.button(&decline_label).clicked() {
+                                decline_call = true;
+                            }
+                        });
+                        ui.separator();
                     }
-                    let camera_label = if camera_disabled {
-                        enable_camera_label
-                    } else {
-                        disable_camera_label
-                    };
-                    if ui
-                        .add_enabled(video && accepted, egui::Button::new(camera_label))
-                        .clicked()
-                    {
-                        camera_disabled = !camera_disabled;
-                    }
-                    if ui.button(hang_up_label).clicked() {
-                        end_call = true;
-                    }
+                    ui.horizontal(|ui| {
+                        let mic_label = if microphone_muted {
+                            unmute_label.as_str()
+                        } else {
+                            mute_label.as_str()
+                        };
+                        if ui
+                            .add_enabled(accepted, egui::Button::new(mic_label))
+                            .clicked()
+                        {
+                            microphone_muted = !microphone_muted;
+                        }
+                        let camera_label = if camera_disabled {
+                            enable_camera_label.as_str()
+                        } else {
+                            disable_camera_label.as_str()
+                        };
+                        if ui
+                            .add_enabled(video && accepted, egui::Button::new(camera_label))
+                            .clicked()
+                        {
+                            camera_disabled = !camera_disabled;
+                        }
+                        if ui.button(&hang_up_label).clicked() {
+                            end_call = true;
+                        }
+                    });
                 });
-            });
+                ctx.request_repaint_after(Duration::from_millis(42));
+            },
+        );
         if accept_call {
             if let Some(auth) = self.auth.clone() {
                 let core = self.core.clone();
