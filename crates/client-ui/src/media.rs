@@ -50,7 +50,8 @@ const OPUS_SAMPLE_RATE: u32 = 48_000;
 const OPUS_FRAME_SAMPLES: usize = 960;
 const OPUS_MAX_PACKET_BYTES: usize = 1275;
 const VIDEO_CLOCK_RATE: u32 = 90_000;
-const VIDEO_FRAME_DURATION: Duration = Duration::from_millis(200);
+const VIDEO_FRAME_DURATION: Duration = Duration::from_millis(333);
+const CAMERA_FRAME_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone)]
 pub struct IceConfig {
@@ -136,6 +137,7 @@ pub struct VideoCaptureSession {
     status: Arc<Mutex<String>>,
 }
 
+#[derive(Clone)]
 pub struct WebRtcSession {
     peer_connection: Arc<RTCPeerConnection>,
     status: Arc<Mutex<String>>,
@@ -321,7 +323,6 @@ impl WebRtcSession {
                 }
             }
         });
-        let data_channel_for_video = data_channel.clone();
         let video_track_for_sender = video_track.clone();
         let status_for_video = status.clone();
         thread::spawn(move || {
@@ -360,19 +361,6 @@ impl WebRtcSession {
                             *status_for_video.lock().expect("webrtc_status") =
                                 format!("H264 encode failed: {err}");
                         }
-                    }
-                }
-                let channel = data_channel_for_video
-                    .lock()
-                    .expect("webrtc_data_channel")
-                    .clone();
-                if let Some(channel) = channel {
-                    if rt
-                        .block_on(channel.send(&Bytes::from(encode_video_frame(&frame))))
-                        .is_err()
-                    {
-                        *status_for_video.lock().expect("webrtc_status") =
-                            "WebRTC video send failed".to_string();
                     }
                 }
             }
@@ -650,8 +638,14 @@ fn run_camera_capture(
     *status.lock().expect("video_capture_status") = "Camera capture active".to_string();
     let mut frames = 0_u64;
     let mut last_sent = Instant::now();
+    let mut last_frame = Instant::now() - CAMERA_FRAME_INTERVAL;
     while !stop.load(Ordering::Relaxed) {
+        let elapsed = last_frame.elapsed();
+        if elapsed < CAMERA_FRAME_INTERVAL {
+            thread::sleep(CAMERA_FRAME_INTERVAL - elapsed);
+        }
         let frame = camera.frame()?;
+        last_frame = Instant::now();
         let resolution = frame.resolution();
         let image = frame.decode_image::<RgbFormat>()?;
         let (width, height, rgb) = preview_rgb(image.width(), image.height(), image.as_raw());
@@ -663,7 +657,7 @@ fn run_camera_capture(
             rgb,
         };
         *latest.lock().expect("video_capture_latest") = Some(info.clone());
-        if last_sent.elapsed() >= Duration::from_millis(200) {
+        if last_sent.elapsed() >= VIDEO_FRAME_DURATION {
             if let Some(video_tx) = video_tx.as_ref() {
                 let _ = video_tx.send(info);
             }
@@ -979,16 +973,6 @@ fn encode_audio_frame(sample_rate: u32, samples: &[f32]) -> Vec<u8> {
     for sample in samples {
         out.extend_from_slice(&sample.to_le_bytes());
     }
-    out
-}
-
-fn encode_video_frame(frame: &VideoFrameInfo) -> Vec<u8> {
-    let mut out = Vec::with_capacity(20 + frame.rgb.len());
-    out.extend_from_slice(b"RSV1");
-    out.extend_from_slice(&frame.width.to_le_bytes());
-    out.extend_from_slice(&frame.height.to_le_bytes());
-    out.extend_from_slice(&frame.frames.to_le_bytes());
-    out.extend_from_slice(&frame.rgb);
     out
 }
 

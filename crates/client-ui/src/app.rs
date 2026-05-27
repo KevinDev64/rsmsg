@@ -1124,7 +1124,7 @@ impl MessengerApp {
         if self.webrtc_rx.is_some() {
             return;
         }
-        let Some(session) = self.webrtc_session.take() else {
+        let Some(session) = self.webrtc_session.clone() else {
             return;
         };
         let (tx, rx) = mpsc::channel();
