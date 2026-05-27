@@ -390,13 +390,16 @@ impl MessengerApp {
         {
             return;
         }
-        let audio_tx = self
+        let Some(audio_tx) = self
             .webrtc_session
             .as_ref()
-            .map(media::WebRtcSession::audio_sender);
+            .map(media::WebRtcSession::audio_sender)
+        else {
+            return;
+        };
         match media::start_microphone_capture_with_sender(
             &self.settings.microphone,
-            audio_tx,
+            Some(audio_tx),
             self.audio_processing_config(),
         ) {
             Ok(session) => self.media_session = Some(session),
@@ -1102,9 +1105,7 @@ impl MessengerApp {
         self.webrtc_rx = Some(rx);
         let ice_config = self.ice_config();
         thread::spawn(move || {
-            let rt = runtime();
-            let result = rt
-                .block_on(media::WebRtcSession::create_offer(ice_config))
+            let result = media::WebRtcSession::create_offer(ice_config)
                 .map(|(session, offer_payload)| {
                     (session, WebRtcAction::LocalOffer { offer_payload })
                 })
@@ -1121,12 +1122,7 @@ impl MessengerApp {
         self.webrtc_rx = Some(rx);
         let ice_config = self.ice_config();
         thread::spawn(move || {
-            let rt = runtime();
-            let result = rt
-                .block_on(media::WebRtcSession::create_answer(
-                    &offer_payload,
-                    ice_config,
-                ))
+            let result = media::WebRtcSession::create_answer(&offer_payload, ice_config)
                 .map(|(session, answer_payload)| {
                     (session, WebRtcAction::LocalAnswer { answer_payload })
                 })
@@ -1145,9 +1141,8 @@ impl MessengerApp {
         let (tx, rx) = mpsc::channel();
         self.webrtc_rx = Some(rx);
         thread::spawn(move || {
-            let rt = runtime();
-            let result = rt
-                .block_on(session.apply_answer(&answer_payload))
+            let result = session
+                .apply_answer(&answer_payload)
                 .map(|_| (session, WebRtcAction::RemoteAnswerApplied))
                 .map_err(|err| format!("WebRTC answer apply failed: {err}"));
             let _ = tx.send(WebRtcResult { result });
@@ -1226,8 +1221,7 @@ impl MessengerApp {
         self.remote_video_texture = None;
         if let Some(session) = self.webrtc_session.take() {
             thread::spawn(move || {
-                let rt = runtime();
-                rt.block_on(session.close());
+                session.close();
             });
         }
     }

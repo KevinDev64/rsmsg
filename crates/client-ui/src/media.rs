@@ -24,6 +24,7 @@ use openh264::{
     formats::{RgbSliceU8, YUVBuffer, YUVSource},
 };
 use opus::{Application, Channels, Decoder, Encoder};
+use tokio::runtime::Runtime;
 use webrtc::{
     api::{
         APIBuilder,
@@ -139,6 +140,7 @@ pub struct VideoCaptureSession {
 
 #[derive(Clone)]
 pub struct WebRtcSession {
+    runtime: Arc<Runtime>,
     peer_connection: Arc<RTCPeerConnection>,
     status: Arc<Mutex<String>>,
     remote_audio_level: Arc<AtomicU32>,
@@ -178,8 +180,8 @@ impl WebRtcSession {
         self.status.lock().expect("webrtc_status").clone()
     }
 
-    pub async fn close(&self) {
-        let _ = self.peer_connection.close().await;
+    pub fn close(&self) {
+        let _ = self.runtime.block_on(self.peer_connection.close());
     }
 
     pub fn audio_sender(&self) -> mpsc::Sender<Vec<u8>> {
@@ -202,52 +204,60 @@ impl WebRtcSession {
         self.remote_audio_level.load(Ordering::Relaxed) as f32 / 1000.0
     }
 
-    pub async fn create_offer(ice_config: IceConfig) -> Result<(Self, String)> {
-        let session = Self::new(true, ice_config).await?;
-        let offer = session.peer_connection.create_offer(None).await?;
-        let mut gather_complete = session.peer_connection.gathering_complete_promise().await;
-        session.peer_connection.set_local_description(offer).await?;
-        let _ = gather_complete.recv().await;
-        let local = session
-            .peer_connection
-            .local_description()
-            .await
-            .ok_or_else(|| anyhow!("missing local WebRTC offer"))?;
+    pub fn create_offer(ice_config: IceConfig) -> Result<(Self, String)> {
+        let runtime = Arc::new(Runtime::new()?);
+        let session = runtime.block_on(Self::new(true, ice_config, runtime.clone()))?;
+        let local = runtime.block_on(async {
+            let offer = session.peer_connection.create_offer(None).await?;
+            let mut gather_complete = session.peer_connection.gathering_complete_promise().await;
+            session.peer_connection.set_local_description(offer).await?;
+            let _ = gather_complete.recv().await;
+            session
+                .peer_connection
+                .local_description()
+                .await
+                .ok_or_else(|| anyhow!("missing local WebRTC offer"))
+        })?;
         Ok((session, serde_json::to_string(&local)?))
     }
 
-    pub async fn create_answer(
-        offer_payload: &str,
-        ice_config: IceConfig,
-    ) -> Result<(Self, String)> {
-        let session = Self::new(false, ice_config).await?;
+    pub fn create_answer(offer_payload: &str, ice_config: IceConfig) -> Result<(Self, String)> {
+        let runtime = Arc::new(Runtime::new()?);
+        let session = runtime.block_on(Self::new(false, ice_config, runtime.clone()))?;
         let offer = serde_json::from_str::<RTCSessionDescription>(offer_payload)?;
-        session
-            .peer_connection
-            .set_remote_description(offer)
-            .await?;
-        let answer = session.peer_connection.create_answer(None).await?;
-        let mut gather_complete = session.peer_connection.gathering_complete_promise().await;
-        session
-            .peer_connection
-            .set_local_description(answer)
-            .await?;
-        let _ = gather_complete.recv().await;
-        let local = session
-            .peer_connection
-            .local_description()
-            .await
-            .ok_or_else(|| anyhow!("missing local WebRTC answer"))?;
+        let local = runtime.block_on(async {
+            session
+                .peer_connection
+                .set_remote_description(offer)
+                .await?;
+            let answer = session.peer_connection.create_answer(None).await?;
+            let mut gather_complete = session.peer_connection.gathering_complete_promise().await;
+            session
+                .peer_connection
+                .set_local_description(answer)
+                .await?;
+            let _ = gather_complete.recv().await;
+            session
+                .peer_connection
+                .local_description()
+                .await
+                .ok_or_else(|| anyhow!("missing local WebRTC answer"))
+        })?;
         Ok((session, serde_json::to_string(&local)?))
     }
 
-    pub async fn apply_answer(&self, answer_payload: &str) -> Result<()> {
+    pub fn apply_answer(&self, answer_payload: &str) -> Result<()> {
         let answer = serde_json::from_str::<RTCSessionDescription>(answer_payload)?;
-        self.peer_connection.set_remote_description(answer).await?;
+        self.runtime
+            .block_on(self.peer_connection.set_remote_description(answer))?;
         Ok(())
     }
 
-    async fn new(create_data_channel: bool, ice_config: IceConfig) -> Result<Self> {
+    async fn new(
+        create_data_channel: bool,
+        ice_config: IceConfig,
+        runtime: Arc<Runtime>,
+    ) -> Result<Self> {
         let mut media_engine = MediaEngine::default();
         media_engine.register_default_codecs()?;
         let api = APIBuilder::new().with_media_engine(media_engine).build();
@@ -491,6 +501,7 @@ impl WebRtcSession {
             }));
         }
         Ok(Self {
+            runtime,
             peer_connection,
             status,
             remote_audio_level,
