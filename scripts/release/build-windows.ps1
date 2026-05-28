@@ -3,9 +3,22 @@ $Version = if ($env:VERSION) { $env:VERSION } else { (Select-String -Path "Cargo
 $Target = if ($env:TARGET) { $env:TARGET } else { "x86_64-pc-windows-gnu" }
 $Dist = "dist/release/windows-$Target"
 
+function Resolve-Tool($Name, $Candidates) {
+  $Command = Get-Command $Name -ErrorAction SilentlyContinue
+  if ($Command) { return $Command.Source }
+  foreach ($Candidate in $Candidates) {
+    if ($Candidate -and (Test-Path $Candidate)) { return $Candidate }
+  }
+  return $null
+}
+
 New-Item -ItemType Directory -Force -Path "crates/client-ui/assets" | Out-Null
-if (Get-Command magick -ErrorAction SilentlyContinue) {
-  magick "crates/client-ui/assets/logo.png" -define icon:auto-resize=256,128,64,48,32,16 "crates/client-ui/assets/logo.ico"
+$Magick = Resolve-Tool "magick" @(
+  "C:\Program Files\ImageMagick-7.1.1-Q16-HDRI\magick.exe",
+  "C:\Program Files\ImageMagick-7.1.1-Q16\magick.exe"
+)
+if ($Magick) {
+  & $Magick "crates/client-ui/assets/logo.png" -define icon:auto-resize=256,128,64,48,32,16 "crates/client-ui/assets/logo.ico"
 }
 
 cargo build --release -p client-ui --target $Target
@@ -23,8 +36,19 @@ foreach ($Dll in $DllNames) {
   }
 }
 
-if (Get-Command makensis -ErrorAction SilentlyContinue) {
-  makensis /DVERSION=$Version /DDIST_DIR=$Dist "scripts/release/windows-installer.nsi"
-  Get-FileHash "$Dist/rsmsg-setup-$Version-x86_64.exe" -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  rsmsg-setup-$Version-x86_64.exe" } | Set-Content "$Dist/rsmsg-setup-$Version-x86_64.exe.sha256"
+$MakeNsis = Resolve-Tool "makensis" @(
+  "$env:ChocolateyInstall\bin\makensis.exe",
+  "C:\Program Files (x86)\NSIS\makensis.exe",
+  "C:\Program Files\NSIS\makensis.exe"
+)
+if (-not $MakeNsis) {
+  throw "makensis was not found. Install NSIS or add makensis to PATH."
 }
+
+& $MakeNsis /DVERSION=$Version /DDIST_DIR=$Dist "scripts/release/windows-installer.nsi"
+$Installer = "$Dist/rsmsg-setup-$Version-x86_64.exe"
+if (-not (Test-Path $Installer)) {
+  throw "Windows installer was not created: $Installer"
+}
+Get-FileHash $Installer -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  rsmsg-setup-$Version-x86_64.exe" } | Set-Content "$Installer.sha256"
 Get-FileHash "$Dist/rsmsg.exe" -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  rsmsg.exe" } | Set-Content "$Dist/rsmsg.exe.sha256"
