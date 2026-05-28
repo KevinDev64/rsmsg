@@ -2,10 +2,10 @@
 
 First-release flow:
 
-1. Merge `dev` into `main`.
+1. Merge `dev` into `master`.
 2. Set the workspace version in `Cargo.toml`.
-3. Tag main with `v<version>` and push the tag.
-4. Download GitHub Actions artifacts or run packaging scripts locally.
+3. Tag `master` with `v<version>` and push the tag.
+4. Download installers from the GitHub Release or run packaging scripts locally.
 5. Upload files under `https://kevindev64.ru/rsmsg-downloads/releases/<version>/`.
 6. Generate and publish `stable/manifest.json`.
 7. Set `MIN_CLIENT_VERSION` on the production server when a mandatory update is required.
@@ -33,6 +33,8 @@ scripts/release/build-linux.sh
 scripts/release/build-macos.sh
 VERSION=1.0.0 scripts/release/generate-manifest.sh
 ```
+
+The manifest generator includes only files that exist locally. This allows creating a manifest from a partial local build without empty platform hashes.
 
 Windows packaging runs from PowerShell:
 

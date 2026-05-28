@@ -10,6 +10,25 @@ sha() {
   shasum -a 256 "$1" | awk '{print $1}'
 }
 
+platform_entry() {
+  local key="$1"
+  local url="$2"
+  local path="$3"
+  if [[ ! -f "$path" ]]; then
+    return 0
+  fi
+  if [[ "$first" == "false" ]]; then
+    printf ',\n' >> "$OUT"
+  fi
+  first=false
+  cat >> "$OUT" <<JSON
+    "${key}": {
+      "url": "${url}",
+      "sha256": "$(sha "$path")"
+    }
+JSON
+}
+
 mkdir -p "$(dirname "${OUT}")"
 cat > "${OUT}" <<JSON
 {
@@ -18,22 +37,16 @@ cat > "${OUT}" <<JSON
   "mandatory": false,
   "notes_url": "${BASE_URL}/notes.html",
   "platforms": {
-    "windows-x86_64": {
-      "url": "${BASE_URL}/windows/rsmsg-setup-${VERSION}-x86_64.exe",
-      "sha256": "$(sha dist/release/windows-x86_64-pc-windows-gnu/rsmsg-setup-${VERSION}-x86_64.exe 2>/dev/null || true)"
-    },
-    "macos-aarch64": {
-      "url": "${BASE_URL}/macos/rsmsg-${VERSION}-aarch64-apple-darwin.dmg",
-      "sha256": "$(sha dist/release/macos-aarch64-apple-darwin/rsmsg-${VERSION}-aarch64-apple-darwin.dmg 2>/dev/null || true)"
-    },
-    "macos-x86_64": {
-      "url": "${BASE_URL}/macos/rsmsg-${VERSION}-x86_64-apple-darwin.dmg",
-      "sha256": "$(sha dist/release/macos-x86_64-apple-darwin/rsmsg-${VERSION}-x86_64-apple-darwin.dmg 2>/dev/null || true)"
-    },
-    "linux-x86_64": {
-      "url": "${BASE_URL}/linux/rsmsg-${VERSION}-x86_64-unknown-linux-gnu.tar.gz",
-      "sha256": "$(sha dist/release/linux-x86_64-unknown-linux-gnu/rsmsg-${VERSION}-x86_64-unknown-linux-gnu.tar.gz 2>/dev/null || true)"
-    }
+JSON
+
+first=true
+platform_entry "windows-x86_64" "${BASE_URL}/windows/rsmsg-setup-${VERSION}-x86_64.exe" "dist/release/windows-x86_64-pc-windows-gnu/rsmsg-setup-${VERSION}-x86_64.exe"
+platform_entry "macos-aarch64" "${BASE_URL}/macos/rsmsg-${VERSION}-aarch64-apple-darwin.dmg" "dist/release/macos-aarch64-apple-darwin/rsmsg-${VERSION}-aarch64-apple-darwin.dmg"
+platform_entry "macos-x86_64" "${BASE_URL}/macos/rsmsg-${VERSION}-x86_64-apple-darwin.dmg" "dist/release/macos-x86_64-apple-darwin/rsmsg-${VERSION}-x86_64-apple-darwin.dmg"
+platform_entry "linux-x86_64" "${BASE_URL}/linux/rsmsg-${VERSION}-x86_64-unknown-linux-gnu.tar.gz" "dist/release/linux-x86_64-unknown-linux-gnu/rsmsg-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+
+cat >> "${OUT}" <<JSON
+
   }
 }
 JSON
