@@ -10,12 +10,15 @@ pub struct ClientConfig {
 
 impl ClientConfig {
     pub fn local_default() -> Self {
-        let profile = std::env::var("RSMSG_PROFILE").unwrap_or_else(|_| "default".to_string());
         Self {
             http_base: "http://127.0.0.1:3000".to_string(),
             ws_base: "ws://127.0.0.1:3000".to_string(),
-            session_store_path: format!(".rsmsg_peer_sessions.{profile}.json"),
-            key_store_path: format!(".rsmsg_local_keys.{profile}.json"),
+            session_store_path: crate::storage::migrated_profile_file("rsmsg_peer_sessions")
+                .to_string_lossy()
+                .into_owned(),
+            key_store_path: crate::storage::migrated_profile_file("rsmsg_local_keys")
+                .to_string_lossy()
+                .into_owned(),
         }
     }
 

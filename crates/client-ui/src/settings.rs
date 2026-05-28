@@ -1,4 +1,6 @@
-use std::{fs, path::Path};
+use std::{fs, path::PathBuf};
+
+use client_core::storage;
 
 use serde::{Deserialize, Serialize};
 
@@ -71,26 +73,30 @@ pub struct AppSettings {
 impl AppSettings {
     pub fn load() -> Self {
         let file = settings_file();
-        let path = Path::new(&file);
-        if !path.exists() {
+        let raw = fs::read_to_string(&file)
+            .or_else(|_| fs::read_to_string(legacy_settings_file()))
+            .unwrap_or_default();
+        if raw.is_empty() {
             return Self::default();
         }
-        let Ok(raw) = fs::read_to_string(path) else {
-            return Self::default();
-        };
         serde_json::from_str(&raw).unwrap_or_default()
     }
 
     pub fn save(&self) {
         if let Ok(raw) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(settings_file(), raw);
+            let file = settings_file();
+            storage::ensure_parent(&file);
+            let _ = fs::write(file, raw);
         }
     }
 }
 
-fn settings_file() -> String {
-    let profile = std::env::var("RSMSG_PROFILE").unwrap_or_else(|_| "default".to_string());
-    format!(".rsmsg_settings.{profile}.json")
+fn settings_file() -> PathBuf {
+    storage::profile_file("rsmsg_settings")
+}
+
+fn legacy_settings_file() -> PathBuf {
+    storage::legacy_profile_file("rsmsg_settings")
 }
 
 fn system_language_code() -> &'static str {

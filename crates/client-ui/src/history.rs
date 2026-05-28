@@ -1,6 +1,6 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
-use client_core::local_vault;
+use client_core::{local_vault, storage};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -58,27 +58,32 @@ pub struct ChatHistory {
 impl ChatHistory {
     pub fn load(password: Option<&str>) -> Self {
         let file = history_file();
-        let path = Path::new(&file);
-        if !path.exists() {
-            return Self::default();
-        }
-        if let Some(history) = local_vault::load_json::<Self>(&file, password) {
+        if let Some(history) = local_vault::load_json::<Self>(&file.to_string_lossy(), password) {
             return history;
         }
-        let Ok(raw) = fs::read_to_string(path) else {
+        let legacy_file = legacy_history_file();
+        if let Some(history) =
+            local_vault::load_json::<Self>(&legacy_file.to_string_lossy(), password)
+        {
+            return history;
+        }
+        let Ok(raw) = fs::read_to_string(file).or_else(|_| fs::read_to_string(legacy_file)) else {
             return Self::default();
         };
         serde_json::from_str(&raw).unwrap_or_default()
     }
 
     pub fn save(&self, password: Option<&str>) {
-        let _ = local_vault::save_json(&history_file(), self, password);
+        let _ = local_vault::save_json(&history_file().to_string_lossy(), self, password);
     }
 }
 
-fn history_file() -> String {
-    let profile = std::env::var("RSMSG_PROFILE").unwrap_or_else(|_| "default".to_string());
-    format!(".rsmsg_chat_history.{profile}.json")
+fn history_file() -> PathBuf {
+    storage::profile_file("rsmsg_chat_history")
+}
+
+fn legacy_history_file() -> PathBuf {
+    storage::legacy_profile_file("rsmsg_chat_history")
 }
 
 pub fn now_ms() -> i64 {
