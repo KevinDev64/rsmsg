@@ -12,6 +12,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       SERVER_ADDR: 0.0.0.0:3000
       RUST_LOG: ${RUST_LOG:-server=info,tower_http=info}
+      MIN_CLIENT_VERSION: ${MIN_CLIENT_VERSION:-0.0.0}
     depends_on:
       postgres:
         condition: service_healthy

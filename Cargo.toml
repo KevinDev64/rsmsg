@@ -50,3 +50,4 @@ uuid = { version = "1", features = ["v4", "serde"] }
 webrtc = "0.17"
 webrtc-media = "0.17"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
+winresource = "0.1"

@@ -29,3 +29,6 @@ tray-icon.workspace = true
 uuid.workspace = true
 webrtc.workspace = true
 webrtc-media.workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+winresource.workspace = true
