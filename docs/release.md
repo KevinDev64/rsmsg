@@ -26,6 +26,8 @@ rsmsg-downloads/
 
 Local packaging commands:
 
+Linux packaging requires `libgtk-3-dev libayatana-appindicator3-dev libasound2-dev libudev-dev libxdo-dev cmake pkg-config`.
+
 ```bash
 scripts/release/build-linux.sh
 scripts/release/build-macos.sh
