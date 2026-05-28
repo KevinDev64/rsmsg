@@ -431,9 +431,17 @@ impl ApiTransport {
         Ok(response.json().await?)
     }
 
-    pub async fn fetch_blob_bytes(&self, auth: &DeviceAuth, blob_id: String) -> Result<Vec<u8>> {
+    pub async fn fetch_blob_bytes_with_progress<F>(
+        &self,
+        auth: &DeviceAuth,
+        blob_id: String,
+        mut progress: F,
+    ) -> Result<Vec<u8>>
+    where
+        F: FnMut(u64, u64),
+    {
         let url = format!("{}/v1/fetch_blob_bytes", self.cfg.http_base);
-        let response = self
+        let mut response = self
             .client
             .post(url)
             .headers(self.auth_headers(auth)?)
@@ -446,7 +454,16 @@ impl ApiTransport {
                 response.status()
             ));
         }
-        Ok(response.bytes().await?.to_vec())
+        let total = response.content_length().unwrap_or_default();
+        let mut downloaded = 0_u64;
+        let mut out = Vec::with_capacity(total as usize);
+        progress(downloaded, total);
+        while let Some(chunk) = response.chunk().await? {
+            downloaded = downloaded.saturating_add(chunk.len() as u64);
+            out.extend_from_slice(&chunk);
+            progress(downloaded, total);
+        }
+        Ok(out)
     }
 
     pub async fn ws_once(&self, auth: &DeviceAuth) -> Result<Vec<PendingEnvelope>> {

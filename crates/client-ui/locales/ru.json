@@ -139,6 +139,7 @@
   "status.file_data_unavailable": "Данные файла недоступны",
   "status.file_too_large": "Файл слишком большой. Лимит 100 MB",
   "status.found_users": "Найдено пользователей: {count}",
+  "status.downloading_file": "Скачиваем {file_name}: {percent}%",
   "status.login_worker_stopped": "Задача входа остановилась",
   "status.logged_in_as": "Вы вошли как {nickname}",
   "status.logged_out": "Вы вышли",

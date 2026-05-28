@@ -62,7 +62,7 @@ pub struct MessengerApp {
     send_rx: Option<Receiver<SendEvent>>,
     sync_rx: Option<Receiver<SyncResult>>,
     read_ack_rx: Option<Receiver<ReadAckResult>>,
-    save_file_rx: Option<Receiver<SaveFileResult>>,
+    save_file_rx: Option<Receiver<SaveFileEvent>>,
     trust_rx: Option<Receiver<TrustResult>>,
     call_rx: Option<Receiver<CallResult>>,
     call_signal_rx: Option<Receiver<CallSignalResult>>,
@@ -172,6 +172,15 @@ struct ReadAckResult {
 struct SaveFileResult {
     file_name: String,
     result: Result<(), String>,
+}
+
+enum SaveFileEvent {
+    Progress {
+        file_name: String,
+        downloaded: u64,
+        total: u64,
+    },
+    Done(SaveFileResult),
 }
 
 struct TrustResult {
@@ -1275,7 +1284,7 @@ impl MessengerApp {
                             std::fs::write(path, data)
                                 .map_err(|err| format!("Could not save file: {err}"))
                         });
-                let _ = tx.send(SaveFileResult { file_name, result });
+                let _ = tx.send(SaveFileEvent::Done(SaveFileResult { file_name, result }));
             });
             return;
         }
@@ -1288,9 +1297,18 @@ impl MessengerApp {
         self.save_file_rx = Some(rx);
         self.status = self.tf("status.saving_file", &[("file_name", &file_name)]);
         thread::spawn(move || {
-            let result = run_save_file_flow(core, auth, blob_id, file_key_b64, path)
-                .map_err(|err| format!("Could not save file: {err}"));
-            let _ = tx.send(SaveFileResult { file_name, result });
+            let progress_tx = tx.clone();
+            let result = run_save_file_flow(
+                core,
+                auth,
+                blob_id,
+                file_key_b64,
+                path,
+                file_name.clone(),
+                progress_tx,
+            )
+            .map_err(|err| format!("Could not save file: {err}"));
+            let _ = tx.send(SaveFileEvent::Done(SaveFileResult { file_name, result }));
         });
     }
 
@@ -1348,7 +1366,23 @@ impl MessengerApp {
             return;
         };
         match rx.try_recv() {
-            Ok(saved) => match saved.result {
+            Ok(SaveFileEvent::Progress {
+                file_name,
+                downloaded,
+                total,
+            }) => {
+                let percent = if total == 0 {
+                    0
+                } else {
+                    ((downloaded.saturating_mul(100)) / total).min(100)
+                };
+                self.status = self.tf(
+                    "status.downloading_file",
+                    &[("file_name", &file_name), ("percent", &percent.to_string())],
+                );
+                self.save_file_rx = Some(rx);
+            }
+            Ok(SaveFileEvent::Done(saved)) => match saved.result {
                 Ok(()) => self.status = format!("Saved {}", saved.file_name),
                 Err(err) => self.status = err,
             },
@@ -3021,10 +3055,23 @@ fn run_save_file_flow(
     blob_id: String,
     file_key_b64: String,
     path: PathBuf,
+    file_name: String,
+    progress_tx: mpsc::Sender<SaveFileEvent>,
 ) -> Result<(), String> {
     let rt = runtime();
     let data = rt
-        .block_on(core.fetch_file_blob(&auth, blob_id, file_key_b64))
+        .block_on(core.fetch_file_blob_with_progress(
+            &auth,
+            blob_id,
+            file_key_b64,
+            move |downloaded, total| {
+                let _ = progress_tx.send(SaveFileEvent::Progress {
+                    file_name: file_name.clone(),
+                    downloaded,
+                    total,
+                });
+            },
+        ))
         .map_err(|err| format!("fetch failed: {err}"))?;
     std::fs::write(path, data).map_err(|err| format!("write failed: {err}"))
 }

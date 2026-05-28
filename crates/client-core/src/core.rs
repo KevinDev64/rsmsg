@@ -412,7 +412,24 @@ impl ClientCore {
         blob_id: String,
         file_key_b64: String,
     ) -> Result<Vec<u8>> {
-        let blob = self.transport.fetch_blob_bytes(auth, blob_id).await?;
+        self.fetch_file_blob_with_progress(auth, blob_id, file_key_b64, |_, _| {})
+            .await
+    }
+
+    pub async fn fetch_file_blob_with_progress<F>(
+        &self,
+        auth: &DeviceAuth,
+        blob_id: String,
+        file_key_b64: String,
+        progress: F,
+    ) -> Result<Vec<u8>>
+    where
+        F: FnMut(u64, u64),
+    {
+        let blob = self
+            .transport
+            .fetch_blob_bytes_with_progress(auth, blob_id, progress)
+            .await?;
         self.crypto.decrypt_bytes(&file_key_b64, &blob)
     }
 

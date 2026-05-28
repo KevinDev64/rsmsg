@@ -139,6 +139,7 @@
   "status.file_data_unavailable": "File data is unavailable",
   "status.file_too_large": "File is too large. Limit is 100 MB",
   "status.found_users": "Found {count} users",
+  "status.downloading_file": "Downloading {file_name}: {percent}%",
   "status.login_worker_stopped": "Login worker stopped",
   "status.logged_in_as": "Logged in as {nickname}",
   "status.logged_out": "Logged out",
