@@ -45,7 +45,8 @@ if (-not $MakeNsis) {
   throw "makensis was not found. Install NSIS or add makensis to PATH."
 }
 
-& $MakeNsis /DVERSION=$Version /DDIST_DIR=$Dist "scripts/release/windows-installer.nsi"
+$DistNsis = (Resolve-Path $Dist).Path
+& $MakeNsis "/DVERSION=$Version" "/DDIST_DIR=$DistNsis" "scripts/release/windows-installer.nsi"
 $Installer = "$Dist/rsmsg-setup-$Version-x86_64.exe"
 if (-not (Test-Path $Installer)) {
   throw "Windows installer was not created: $Installer"
