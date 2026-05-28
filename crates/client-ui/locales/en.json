@@ -52,6 +52,7 @@
   "call.noise_suppression": "Noise suppression",
   "call.outgoing_note": "Call signaling and WebRTC media are active.",
   "call.refresh_devices": "Refresh devices",
+  "call.show_debug_info": "Show call debug info",
   "call.remote_video": "Their video",
   "call.remote_video_empty": "Waiting for their video...",
   "call.remote_audio_inactive": "Their audio is not active.",

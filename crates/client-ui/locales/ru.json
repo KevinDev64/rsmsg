@@ -52,6 +52,7 @@
   "call.noise_suppression": "Подавление шума",
   "call.outgoing_note": "Сигналинг и WebRTC-медиа активны.",
   "call.refresh_devices": "Обновить устройства",
+  "call.show_debug_info": "Показывать отладочную информацию звонка",
   "call.remote_video": "Видео собеседника",
   "call.remote_video_empty": "Ожидание видео собеседника...",
   "call.remote_audio_inactive": "Аудио собеседника не активно.",

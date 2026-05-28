@@ -20,7 +20,10 @@ use nokhwa::{
 };
 use openh264::{
     decoder::Decoder as H264Decoder,
-    encoder::Encoder as H264Encoder,
+    encoder::{
+        BitRate, Encoder as H264Encoder, EncoderConfig, FrameRate, IntraFramePeriod,
+        RateControlMode,
+    },
     formats::{RgbSliceU8, YUVBuffer, YUVSource},
 };
 use opus::{Application, Channels, Decoder, Encoder};
@@ -343,7 +346,15 @@ impl WebRtcSession {
             let Ok(rt) = tokio::runtime::Runtime::new() else {
                 return;
             };
-            let mut encoder = match H264Encoder::new() {
+            let mut encoder = match H264Encoder::with_api_config(
+                openh264::OpenH264API::from_source(),
+                EncoderConfig::new()
+                    .bitrate(BitRate::from_bps(900_000))
+                    .max_frame_rate(FrameRate::from_hz(24.0))
+                    .rate_control_mode(RateControlMode::Bitrate)
+                    .intra_frame_period(IntraFramePeriod::from_num_frames(24))
+                    .skip_frames(false),
+            ) {
                 Ok(encoder) => Some(encoder),
                 Err(err) => {
                     *status_for_video.lock().expect("webrtc_status") =
@@ -351,13 +362,18 @@ impl WebRtcSession {
                     None
                 }
             };
+            let mut encoded_frames = 0_u64;
             while let Ok(frame) = outbound_video_rx.recv() {
                 if let Some(encoder) = encoder.as_mut() {
+                    if encoded_frames % 24 == 0 {
+                        encoder.force_intra_frame();
+                    }
                     let rgb =
                         RgbSliceU8::new(&frame.rgb, (frame.width as usize, frame.height as usize));
                     let yuv = YUVBuffer::from_rgb8_source(rgb);
                     match encoder.encode(&yuv) {
                         Ok(bitstream) => {
+                            encoded_frames = encoded_frames.saturating_add(1);
                             let sample = Sample {
                                 data: Bytes::from(bitstream.to_vec()),
                                 duration: VIDEO_FRAME_DURATION,
@@ -822,23 +838,23 @@ fn attach_data_receiver(
     channel: Arc<RTCDataChannel>,
     playback_queue: Arc<Mutex<VecDeque<f32>>>,
     remote_video: Arc<Mutex<Option<VideoFrameInfo>>>,
-    status: Arc<Mutex<String>>,
+    _status: Arc<Mutex<String>>,
 ) {
     let h264_decoder = Arc::new(Mutex::new(H264Decoder::new().ok()));
     channel.on_message(Box::new(move |message: DataChannelMessage| {
         let mut decoder = h264_decoder.lock().expect("h264_data_decoder");
         if let Some(frame) = decode_video_frame(&message.data) {
             *remote_video.lock().expect("remote_video") = Some(frame);
-        } else if let Some(frame) = decode_h264_video_frame(&message.data, decoder.as_mut()) {
-            *remote_video.lock().expect("remote_video") = Some(frame);
+        } else if message.data.starts_with(b"RSH1") {
+            if let Some(frame) = decode_h264_video_frame(&message.data, decoder.as_mut()) {
+                *remote_video.lock().expect("remote_video") = Some(frame);
+            }
         } else if let Some(samples) = decode_audio_frame(&message.data) {
             let mut queue = playback_queue.lock().expect("audio_playback_queue");
             queue.extend(samples);
             while queue.len() > PLAYBACK_BUFFER_MAX {
                 queue.pop_front();
             }
-        } else {
-            *status.lock().expect("webrtc_status") = "Unknown WebRTC message".to_string();
         }
         Box::pin(async {})
     }));

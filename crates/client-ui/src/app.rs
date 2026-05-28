@@ -2310,6 +2310,11 @@ impl MessengerApp {
                             &mut self.settings.automatic_gain_control,
                             automatic_gain_control,
                         );
+                        let show_call_debug_info = self.t("call.show_debug_info");
+                        ui.checkbox(
+                            &mut self.settings.show_call_debug_info,
+                            show_call_debug_info,
+                        );
 
                         ui.separator();
                         ui.heading(self.t("call.network"));
@@ -2446,6 +2451,7 @@ impl MessengerApp {
             .webrtc_session
             .as_ref()
             .and_then(media::WebRtcSession::remote_video);
+        let show_call_debug_info = self.settings.show_call_debug_info;
         let local_video_texture = video_info.as_ref().and_then(|info| {
             video_texture(ctx, &mut self.local_video_texture, "local-video", info)
         });
@@ -2541,7 +2547,9 @@ impl MessengerApp {
                             ui.allocate_ui(egui::vec2(360.0, 300.0), |ui| {
                                 ui.vertical_centered(|ui| {
                                     ui.heading(&local_video_label);
-                                    if let Some(status) = local_video_status.as_ref() {
+                                    if show_call_debug_info
+                                        && let Some(status) = local_video_status.as_ref()
+                                    {
                                         ui.label(status);
                                     }
                                     let (rect, _) = ui.allocate_exact_size(
@@ -2566,7 +2574,9 @@ impl MessengerApp {
                             ui.allocate_ui(egui::vec2(360.0, 300.0), |ui| {
                                 ui.vertical_centered(|ui| {
                                     ui.heading(&remote_video_label);
-                                    if let Some(status) = remote_video_status.as_ref() {
+                                    if show_call_debug_info
+                                        && let Some(status) = remote_video_status.as_ref()
+                                    {
                                         ui.label(status);
                                     }
                                     let (rect, _) = ui.allocate_exact_size(

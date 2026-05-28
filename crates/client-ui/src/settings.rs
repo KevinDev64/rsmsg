@@ -64,6 +64,8 @@ pub struct AppSettings {
     pub noise_suppression: bool,
     #[serde(default = "default_true")]
     pub automatic_gain_control: bool,
+    #[serde(default)]
+    pub show_call_debug_info: bool,
 }
 
 impl AppSettings {
