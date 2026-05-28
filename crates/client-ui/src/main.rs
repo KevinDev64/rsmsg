@@ -8,6 +8,7 @@ mod message_ui;
 mod notifications;
 mod settings;
 mod tray;
+mod updater;
 
 use app::MessengerApp;
 use eframe::egui;

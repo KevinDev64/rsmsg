@@ -23,6 +23,7 @@ use crate::{
     notifications,
     settings::{AppLanguage, AppSettings, AppTheme},
     tray::{AppTray, TrayCommand},
+    updater::{self, UpdateInfo},
 };
 
 const DEFAULT_DEVICE_ID: &str = "main";
@@ -78,6 +79,9 @@ pub struct MessengerApp {
     media_failed_call_id: Option<String>,
     local_video_texture: Option<CachedVideoTexture>,
     remote_video_texture: Option<CachedVideoTexture>,
+    update_rx: Option<Receiver<UpdateResult>>,
+    update_info: Option<UpdateInfo>,
+    update_window_open: bool,
     last_sync_at: Instant,
 }
 
@@ -181,6 +185,10 @@ enum SaveFileEvent {
         total: u64,
     },
     Done(SaveFileResult),
+}
+
+struct UpdateResult {
+    result: Result<Option<UpdateInfo>, String>,
 }
 
 struct TrustResult {
@@ -304,7 +312,7 @@ impl MessengerApp {
         let core = ClientCore::new(config);
         let nickname = settings.default_username.clone();
         let tray = AppTray::new();
-        Self {
+        let mut app = Self {
             core,
             local_keys: None,
             history: ChatHistory::load(None),
@@ -353,7 +361,48 @@ impl MessengerApp {
             media_failed_call_id: None,
             local_video_texture: None,
             remote_video_texture: None,
+            update_rx: None,
+            update_info: None,
+            update_window_open: false,
             last_sync_at: Instant::now(),
+        };
+        app.check_for_updates();
+        app
+    }
+
+    fn check_for_updates(&mut self) {
+        if self.update_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.update_rx = Some(rx);
+        thread::spawn(move || {
+            let rt = runtime();
+            let result = rt
+                .block_on(updater::check_for_update(
+                    updater::UPDATE_MANIFEST_URL,
+                    env!("CARGO_PKG_VERSION"),
+                ))
+                .map_err(|err| format!("Update check failed: {err}"));
+            let _ = tx.send(UpdateResult { result });
+        });
+    }
+
+    fn poll_update_result(&mut self) {
+        let Some(rx) = self.update_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(result) => match result.result {
+                Ok(Some(info)) => {
+                    self.update_info = Some(info);
+                    self.update_window_open = true;
+                }
+                Ok(None) => {}
+                Err(err) => self.status = err,
+            },
+            Err(mpsc::TryRecvError::Empty) => self.update_rx = Some(rx),
+            Err(mpsc::TryRecvError::Disconnected) => {}
         }
     }
 
@@ -458,6 +507,11 @@ impl MessengerApp {
 
     fn register_or_login(&mut self, create: bool) {
         if self.login_rx.is_some() {
+            return;
+        }
+        if self.update_info.as_ref().is_some_and(|info| info.mandatory) {
+            self.update_window_open = true;
+            self.status = self.t("update.login_blocked");
             return;
         }
         if self.nickname.trim().is_empty() || self.password.len() < 6 {
@@ -1866,6 +1920,7 @@ impl eframe::App for MessengerApp {
         self.poll_read_ack_result();
         self.poll_save_file_result();
         self.poll_trust_result();
+        self.poll_update_result();
         self.poll_call_result();
         self.poll_call_signals();
         self.poll_webrtc_result();
@@ -2152,6 +2207,9 @@ impl eframe::App for MessengerApp {
         if self.delete_chat_confirm.is_some() {
             self.render_delete_chat_window(ctx);
         }
+        if self.update_window_open {
+            self.render_update_window(ctx);
+        }
         if self.active_call.is_some() {
             self.render_call_window(ctx);
         }
@@ -2401,6 +2459,9 @@ impl MessengerApp {
                             self.tf("about.version", &[("version", env!("CARGO_PKG_VERSION"))]),
                         );
                         ui.label(self.t("about.creator"));
+                        if ui.button(self.t("update.check_now")).clicked() {
+                            self.check_for_updates();
+                        }
 
                         ui.separator();
                         if ui.button(self.t("common.close")).clicked() {
@@ -2409,6 +2470,53 @@ impl MessengerApp {
                     });
             });
         self.settings_open = open && self.settings_open;
+    }
+
+    fn render_update_window(&mut self, ctx: &egui::Context) {
+        let Some(info) = self.update_info.clone() else {
+            self.update_window_open = false;
+            return;
+        };
+        let mut open = self.update_window_open;
+        egui::Window::new(self.t("update.title"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.label(self.tf(
+                    "update.available",
+                    &[
+                        ("current", &info.current_version),
+                        ("latest", &info.version),
+                    ],
+                ));
+                ui.label(self.tf(
+                    "update.minimum_supported",
+                    &[("version", &info.minimum_supported_version)],
+                ));
+                ui.label(self.tf("update.sha256", &[("sha256", &info.sha256)]));
+                if info.mandatory {
+                    ui.label(self.t("update.mandatory"));
+                }
+                ui.horizontal(|ui| {
+                    if ui.button(self.t("update.download")).clicked() {
+                        match updater::open_url(&info.url) {
+                            Ok(()) => self.status = self.t("update.opened_download"),
+                            Err(err) => self.status = format!("Could not open update: {err}"),
+                        }
+                    }
+                    if let Some(notes_url) = info.notes_url.as_ref()
+                        && ui.button(self.t("update.release_notes")).clicked()
+                    {
+                        let _ = updater::open_url(notes_url);
+                    }
+                    if !info.mandatory && ui.button(self.t("common.close")).clicked() {
+                        self.update_window_open = false;
+                    }
+                });
+            });
+        self.update_window_open = open || info.mandatory;
     }
 
     fn render_create_account_window(&mut self, ctx: &egui::Context) {

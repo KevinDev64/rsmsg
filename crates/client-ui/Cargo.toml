@@ -16,6 +16,7 @@ notify-rust.workspace = true
 nokhwa.workspace = true
 opus.workspace = true
 openh264.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

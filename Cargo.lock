@@ -1127,6 +1127,7 @@ dependencies = [
  "notify-rust",
  "openh264",
  "opus",
+ "reqwest",
  "rfd",
  "serde",
  "serde_json",
