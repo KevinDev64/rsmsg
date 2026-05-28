@@ -1,6 +1,7 @@
 use axum::{
     Router,
     extract::DefaultBodyLimit,
+    middleware,
     routing::{get, post},
 };
 use tower_http::trace::TraceLayer;
@@ -52,6 +53,10 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/create_blob", post(blob::create_blob))
         .route("/v1/append_blob_chunk", post(blob::append_blob_chunk))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            crate::version_gate::require_supported_client,
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(app_state)
 }

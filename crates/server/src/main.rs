@@ -24,6 +24,8 @@ async fn main() -> Result<()> {
     let app_state = AppState {
         db: db.clone(),
         login_rate_limiter: LoginRateLimiter::new(),
+        min_client_version: std::env::var("MIN_CLIENT_VERSION")
+            .unwrap_or_else(|_| "0.0.0".to_string()),
     };
     spawn_stats_logger(db);
     let app = build_router(app_state);

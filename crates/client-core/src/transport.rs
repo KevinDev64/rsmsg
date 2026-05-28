@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use shared::{
     AckMessageRequest, AppendBlobChunkRequest, AppendBlobChunkResponse, BlockUserRequest,
     BlockUserResponse, BlockedUsersResponse, CreateBlobResponse, DeviceLoginRequest,
@@ -28,8 +28,24 @@ pub struct ApiTransport {
 
 impl ApiTransport {
     pub fn new(cfg: ClientConfig) -> Self {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-rsmsg-client-version"),
+            HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
+        );
+        headers.insert(
+            HeaderName::from_static("x-rsmsg-platform"),
+            HeaderValue::from_static(platform_key()),
+        );
+        headers.insert(
+            HeaderName::from_static("x-rsmsg-protocol-version"),
+            HeaderValue::from_static("1"),
+        );
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .default_headers(headers)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             cfg,
         }
     }
@@ -517,6 +533,16 @@ impl ApiTransport {
             HeaderValue::from_str(&auth.auth_token).map_err(|_| anyhow!("invalid token header"))?,
         );
         Ok(headers)
+    }
+}
+
+fn platform_key() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => "windows-x86_64",
+        ("macos", "aarch64") => "macos-aarch64",
+        ("macos", "x86_64") => "macos-x86_64",
+        ("linux", "x86_64") => "linux-x86_64",
+        _ => "unknown",
     }
 }
 

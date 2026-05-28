@@ -14,6 +14,7 @@ fn test_app() -> axum::Router {
     build_router(AppState {
         db,
         login_rate_limiter: LoginRateLimiter::new(),
+        min_client_version: "0.0.0".to_string(),
     })
 }
 

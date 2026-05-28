@@ -7,3 +7,4 @@ pub mod login_rate_limit;
 pub mod repository;
 pub mod router;
 pub mod services;
+pub mod version_gate;
