@@ -453,10 +453,7 @@ impl WebRtcSession {
                                         });
                                 }
                                 Ok(None) => {}
-                                Err(err) => {
-                                    *status.lock().expect("webrtc_status") =
-                                        format!("H264 decode failed: {err}");
-                                }
+                                Err(_) => {}
                             }
                         }
                     }

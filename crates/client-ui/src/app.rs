@@ -2580,7 +2580,7 @@ impl MessengerApp {
         let call_window_size = if video {
             egui::vec2(760.0, 560.0)
         } else {
-            egui::vec2(480.0, 300.0)
+            egui::vec2(480.0, 240.0)
         };
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("rsmsg-call-window"),
