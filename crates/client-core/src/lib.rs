@@ -2,6 +2,7 @@ mod core;
 mod key_store;
 pub mod local_vault;
 mod session_store;
+pub mod storage;
 mod transport;
 mod types;
 

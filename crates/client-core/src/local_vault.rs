@@ -37,6 +37,7 @@ pub fn load_json<T: DeserializeOwned>(path: &str, password: Option<&str>) -> Opt
 
 pub fn save_json<T: Serialize>(path: &str, value: &T, password: Option<&str>) -> Result<()> {
     let plaintext = serde_json::to_vec_pretty(value)?;
+    crate::storage::ensure_parent(std::path::Path::new(path));
     if let Some(password) = password {
         let vault = encrypt_vault_file(password, &plaintext)?;
         fs::write(path, serde_json::to_string_pretty(&vault)?)?;
