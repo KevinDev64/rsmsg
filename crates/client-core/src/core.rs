@@ -347,9 +347,34 @@ impl ClientCore {
         data: Vec<u8>,
         message_id: String,
     ) -> Result<bool> {
+        self.send_file_blob_to_peer_with_id_with_progress(
+            auth,
+            peer_device_uuid,
+            file_name,
+            data,
+            message_id,
+            |_, _| {},
+        )
+        .await
+    }
+
+    pub async fn send_file_blob_to_peer_with_id_with_progress<F>(
+        &self,
+        auth: &DeviceAuth,
+        peer_device_uuid: String,
+        file_name: String,
+        data: Vec<u8>,
+        message_id: String,
+        progress: F,
+    ) -> Result<bool>
+    where
+        F: FnMut(u64, u64),
+    {
         let file_key_b64 = self.crypto.generate_shared_key_b64();
         let encrypted_blob = self.crypto.encrypt_bytes(&file_key_b64, &data)?;
-        let blob_id = self.upload_blob_chunked(auth, encrypted_blob).await?;
+        let blob_id = self
+            .upload_blob_chunked_with_progress(auth, encrypted_blob, progress)
+            .await?;
         let payload = EncryptedMessagePayload::File {
             v: 2,
             file_name,
@@ -391,13 +416,20 @@ impl ClientCore {
         self.crypto.decrypt_bytes(&file_key_b64, &blob)
     }
 
-    async fn upload_blob_chunked(
+    async fn upload_blob_chunked_with_progress<F>(
         &self,
         auth: &DeviceAuth,
         encrypted_blob: Vec<u8>,
-    ) -> Result<String> {
+        mut progress: F,
+    ) -> Result<String>
+    where
+        F: FnMut(u64, u64),
+    {
         const CHUNK_SIZE: usize = 256 * 1024;
+        let total = encrypted_blob.len() as u64;
+        let mut uploaded = 0_u64;
         let created = self.transport.create_blob(auth).await?;
+        progress(uploaded, total);
         for chunk in encrypted_blob.chunks(CHUNK_SIZE) {
             self.transport
                 .append_blob_chunk(
@@ -406,6 +438,8 @@ impl ClientCore {
                     base64::Engine::encode(&base64::engine::general_purpose::STANDARD, chunk),
                 )
                 .await?;
+            uploaded = uploaded.saturating_add(chunk.len() as u64).min(total);
+            progress(uploaded, total);
         }
         Ok(created.blob_id)
     }

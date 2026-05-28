@@ -59,7 +59,7 @@ pub struct MessengerApp {
     open_chat_rx: Option<Receiver<OpenChatResult>>,
     search_rx: Option<Receiver<SearchResult>>,
     block_rx: Option<Receiver<BlockResult>>,
-    send_rx: Option<Receiver<SendResult>>,
+    send_rx: Option<Receiver<SendEvent>>,
     sync_rx: Option<Receiver<SyncResult>>,
     read_ack_rx: Option<Receiver<ReadAckResult>>,
     save_file_rx: Option<Receiver<SaveFileResult>>,
@@ -131,6 +131,15 @@ struct SendResult {
     chat_name: String,
     message_index: usize,
     result: Result<(), String>,
+}
+
+enum SendEvent {
+    Progress {
+        file_name: String,
+        uploaded: u64,
+        total: u64,
+    },
+    Done(SendResult),
 }
 
 enum SendContent {
@@ -833,12 +842,13 @@ impl MessengerApp {
                 peer_device_uuid,
                 SendContent::Text(text),
                 message_id,
+                None,
             );
-            let _ = tx.send(SendResult {
+            let _ = tx.send(SendEvent::Done(SendResult {
                 chat_name: send_chat_name,
                 message_index,
                 result,
-            });
+            }));
         });
     }
 
@@ -901,18 +911,20 @@ impl MessengerApp {
         let core = self.core.clone();
         let send_chat_name = chat_name.clone();
         thread::spawn(move || {
+            let progress_tx = tx.clone();
             let result = run_send_flow(
                 core,
                 auth,
                 peer_device_uuid,
                 SendContent::File { file_name, path },
                 message_id,
+                Some(progress_tx),
             );
-            let _ = tx.send(SendResult {
+            let _ = tx.send(SendEvent::Done(SendResult {
                 chat_name: send_chat_name,
                 message_index,
                 result,
-            });
+            }));
         });
     }
 
@@ -1287,7 +1299,23 @@ impl MessengerApp {
             return;
         };
         match rx.try_recv() {
-            Ok(sent) => {
+            Ok(SendEvent::Progress {
+                file_name,
+                uploaded,
+                total,
+            }) => {
+                let percent = if total == 0 {
+                    100
+                } else {
+                    ((uploaded.saturating_mul(100)) / total).min(100)
+                };
+                self.status = self.tf(
+                    "status.uploading_file",
+                    &[("file_name", &file_name), ("percent", &percent.to_string())],
+                );
+                self.send_rx = Some(rx);
+            }
+            Ok(SendEvent::Done(sent)) => {
                 match sent.result {
                     Ok(()) => {
                         self.update_message_status(
@@ -2547,10 +2575,12 @@ impl MessengerApp {
                             ui.allocate_ui(egui::vec2(360.0, 300.0), |ui| {
                                 ui.vertical_centered(|ui| {
                                     ui.heading(&local_video_label);
-                                    if show_call_debug_info
-                                        && let Some(status) = local_video_status.as_ref()
-                                    {
-                                        ui.label(status);
+                                    if show_call_debug_info {
+                                        if let Some(status) = local_video_status.as_ref() {
+                                            ui.label(status);
+                                        } else {
+                                            ui.label(self.t("call.local_video_missing_debug"));
+                                        }
                                     }
                                     let (rect, _) = ui.allocate_exact_size(
                                         egui::vec2(340.0, 255.0),
@@ -2574,10 +2604,12 @@ impl MessengerApp {
                             ui.allocate_ui(egui::vec2(360.0, 300.0), |ui| {
                                 ui.vertical_centered(|ui| {
                                     ui.heading(&remote_video_label);
-                                    if show_call_debug_info
-                                        && let Some(status) = remote_video_status.as_ref()
-                                    {
-                                        ui.label(status);
+                                    if show_call_debug_info {
+                                        if let Some(status) = remote_video_status.as_ref() {
+                                            ui.label(status);
+                                        } else {
+                                            ui.label(self.t("call.remote_video_missing_debug"));
+                                        }
                                     }
                                     let (rect, _) = ui.allocate_exact_size(
                                         egui::vec2(340.0, 255.0),
@@ -2894,6 +2926,7 @@ fn run_send_flow(
     peer_device_uuid: String,
     content: SendContent,
     message_id: String,
+    progress_tx: Option<mpsc::Sender<SendEvent>>,
 ) -> Result<(), String> {
     let rt = runtime();
     let sent = match content {
@@ -2905,12 +2938,22 @@ fn run_send_flow(
             if data.len() > MAX_FILE_BYTES {
                 return Err("File is too large. Limit is 100 MB".to_string());
             }
-            rt.block_on(core.send_file_blob_to_peer_with_id(
+            let progress_file_name = file_name.clone();
+            rt.block_on(core.send_file_blob_to_peer_with_id_with_progress(
                 &auth,
                 peer_device_uuid,
                 file_name,
                 data,
                 message_id,
+                move |uploaded, total| {
+                    if let Some(progress_tx) = progress_tx.as_ref() {
+                        let _ = progress_tx.send(SendEvent::Progress {
+                            file_name: progress_file_name.clone(),
+                            uploaded,
+                            total,
+                        });
+                    }
+                },
             ))
         }
     };
