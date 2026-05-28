@@ -36,6 +36,10 @@ impl AppTray {
             if event.id == show_id {
                 let _ = tx.send(TrayCommand::Show);
             } else if event.id == quit_id {
+                #[cfg(windows)]
+                std::process::exit(0);
+
+                #[cfg(not(windows))]
                 let _ = tx.send(TrayCommand::Quit);
             }
         }));
