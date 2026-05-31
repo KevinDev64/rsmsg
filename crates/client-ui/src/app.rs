@@ -243,6 +243,11 @@ impl MessengerApp {
 
     fn localize_status_error(&self, error: &str) -> String {
         error
+            .replace("invalid credentials", &self.t("error.invalid_credentials"))
+            .replace(
+                "client version is no longer supported",
+                &self.t("update.client_unsupported"),
+            )
             .replace("invite code already used", &self.t("error.invite_used"))
             .replace("nickname already exists", &self.t("error.nickname_exists"))
             .replace(

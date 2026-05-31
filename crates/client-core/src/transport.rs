@@ -60,7 +60,9 @@ impl ApiTransport {
         let url = format!("{}/v1/register_device", self.cfg.http_base);
         let response = self.client.post(url).json(&req).send().await?;
         if !response.status().is_success() {
-            return Err(anyhow!("register_device failed with {}", response.status()));
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(api_error_message(status, body)));
         }
         Ok(response.json().await?)
     }
@@ -84,7 +86,9 @@ impl ApiTransport {
         let url = format!("{}/v1/user_login", self.cfg.http_base);
         let response = self.client.post(url).json(&req).send().await?;
         if !response.status().is_success() {
-            return Err(anyhow!("user_login failed with {}", response.status()));
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(api_error_message(status, body)));
         }
         Ok(response.json().await?)
     }
@@ -125,7 +129,9 @@ impl ApiTransport {
         let url = format!("{}/v1/device_login", self.cfg.http_base);
         let response = self.client.post(url).json(&req).send().await?;
         if !response.status().is_success() {
-            return Err(anyhow!("device_login failed with {}", response.status()));
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(api_error_message(status, body)));
         }
         Ok(response.json().await?)
     }
