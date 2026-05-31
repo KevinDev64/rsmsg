@@ -30,7 +30,7 @@ pub async fn fetch_pending_locked(
     sqlx::query_as::<_, (Uuid, String, Uuid, Vec<u8>, i64)>(
         "SELECT id, message_id, from_device, envelope_bytes, EXTRACT(EPOCH FROM created_at)::BIGINT * 1000 \
          FROM messages \
-         WHERE to_device = $1 AND delivered_at IS NULL \
+         WHERE to_device = $1 AND acked_at IS NULL \
          ORDER BY created_at \
          LIMIT $2 \
          FOR UPDATE SKIP LOCKED",
@@ -45,7 +45,7 @@ pub async fn mark_delivered(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE messages SET delivered_at = NOW() WHERE id = $1")
+    sqlx::query("UPDATE messages SET delivered_at = COALESCE(delivered_at, NOW()) WHERE id = $1")
         .bind(id)
         .execute(&mut **tx)
         .await?;

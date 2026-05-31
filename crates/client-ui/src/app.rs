@@ -1777,6 +1777,13 @@ impl MessengerApp {
     }
 
     fn push_incoming(&mut self, msg: DecryptedMessage) {
+        if self.history.chats.values().any(|messages| {
+            messages
+                .iter()
+                .any(|message| message.message_id.as_deref() == Some(msg.message_id.as_str()))
+        }) {
+            return;
+        }
         let payload = serde_json::from_str::<EncryptedMessagePayload>(&msg.plaintext).ok();
         if matches!(payload, Some(EncryptedMessagePayload::Contact { .. })) {
             let nick = self
