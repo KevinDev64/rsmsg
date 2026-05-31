@@ -4,6 +4,7 @@ use server::{
     services::stats::spawn_stats_logger,
 };
 use sqlx::postgres::PgPoolOptions;
+use std::time::Duration;
 use tracing_subscriber::{EnvFilter, fmt};
 
 #[tokio::main]
@@ -17,6 +18,7 @@ async fn main() -> Result<()> {
 
     let db = PgPoolOptions::new()
         .max_connections(10)
+        .acquire_timeout(Duration::from_secs(5))
         .connect(&database_url)
         .await
         .context("failed to connect to postgres")?;

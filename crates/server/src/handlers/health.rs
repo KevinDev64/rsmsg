@@ -8,6 +8,13 @@ pub async fn health(State(state): State<AppState>) -> StatusCode {
         .await
     {
         Ok(1) => StatusCode::OK,
-        _ => StatusCode::SERVICE_UNAVAILABLE,
+        Ok(value) => {
+            tracing::error!(value, "health check returned unexpected value");
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        Err(error) => {
+            tracing::error!(%error, "health check database query failed");
+            StatusCode::SERVICE_UNAVAILABLE
+        }
     }
 }

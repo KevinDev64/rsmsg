@@ -14,6 +14,7 @@ use shared::{
     UserLoginResponse, UserOnlineRequest, UserOnlineResponse, UserRegisterRequest,
     UserRegisterResponse, UserSearchRequest, UserSearchResponse,
 };
+use std::time::Duration;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -44,6 +45,8 @@ impl ApiTransport {
         Self {
             client: reqwest::Client::builder()
                 .default_headers(headers)
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
             cfg,
