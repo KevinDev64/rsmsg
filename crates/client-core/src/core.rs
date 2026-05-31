@@ -677,20 +677,22 @@ fn decrypt_with_session(
     let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, envelope_b64)?;
     if let Ok(envelope) = serde_json::from_slice::<RatchetEnvelope>(&decoded) {
         if envelope.v == 2 {
-            while session.recv_counter < envelope.counter {
+            let mut next_session = session.clone();
+            while next_session.recv_counter < envelope.counter {
                 let (_skipped, next_chain_key) =
-                    crypto.ratchet_step_b64(&session.recv_chain_key_b64)?;
-                session.recv_chain_key_b64 = next_chain_key;
-                session.recv_counter += 1;
+                    crypto.ratchet_step_b64(&next_session.recv_chain_key_b64)?;
+                next_session.recv_chain_key_b64 = next_chain_key;
+                next_session.recv_counter += 1;
             }
-            if session.recv_counter != envelope.counter {
+            if next_session.recv_counter != envelope.counter {
                 return Err(anyhow::anyhow!("stale ratchet message"));
             }
             let (message_key, next_chain_key) =
-                crypto.ratchet_step_b64(&session.recv_chain_key_b64)?;
+                crypto.ratchet_step_b64(&next_session.recv_chain_key_b64)?;
             let plaintext = crypto.decrypt_text_from_b64(&message_key, &envelope.envelope_b64)?;
-            session.recv_chain_key_b64 = next_chain_key;
-            session.recv_counter += 1;
+            next_session.recv_chain_key_b64 = next_chain_key;
+            next_session.recv_counter += 1;
+            *session = next_session;
             return Ok(plaintext);
         }
     }
