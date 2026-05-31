@@ -12,9 +12,9 @@
 
 4. Wait for GitHub Actions to create the GitHub Release assets.
 
-5. Download installers from the GitHub Release.
+5. Keep installers in the GitHub Release.
 
-6. Send me an email notification (see profile) about your release. I will publish this release as soon as possible. Please specify minimal requirements for client version for running this update.
+6. Send me an email notification (see profile) about your release. I will publish `stable/manifest.json` as soon as possible. Please specify minimal requirements for client version for running this update.
 
 ### Static download layout
 
@@ -22,12 +22,6 @@
 rsmsg-downloads/
   stable/
     manifest.json
-  releases/X.Y.Z/
-    notes.html
-    windows/rsmsg-setup-X.Y.Z-x86_64.exe
-    macos/rsmsg-X.Y.Z-aarch64-apple-darwin.dmg
-    macos/rsmsg-X.Y.Z-x86_64-apple-darwin.dmg
-    linux/rsmsg-X.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 ```
 
 ### Generating manifest locally
@@ -35,11 +29,12 @@ rsmsg-downloads/
 ```bash
 VERSION=X.Y.Z \
 GITHUB_REPO=KevinDev64/rsmsg \
-BASE_URL=https://kevindev64.ru/rsmsg-downloads/releases/X.Y.Z \
 scripts/release/generate-manifest.sh
 ```
 
-The generator includes only platforms that exist in the GitHub Release assets.
+The generator reads asset names and `.sha256` files from GitHub Release through `gh`, writes installer URLs pointing directly to GitHub Release assets, and includes only platforms that exist in the GitHub Release assets.
+
+Only `stable/manifest.json` is hosted on `kevindev64.ru`.
 
 ## Local work
 

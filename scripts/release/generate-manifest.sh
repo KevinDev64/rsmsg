@@ -4,9 +4,10 @@ set -euo pipefail
 VERSION="${VERSION:?VERSION is required, for example VERSION=1.0.0}"
 GITHUB_REPO="${GITHUB_REPO:-KevinDev64/rsmsg}"
 MINIMUM_SUPPORTED_VERSION="${MINIMUM_SUPPORTED_VERSION:-${VERSION}}"
-BASE_URL="${BASE_URL:-https://kevindev64.ru/rsmsg-downloads/releases/${VERSION}}"
 OUT="${OUT:-dist/release/manifest.json}"
 TAG="${TAG:-v${VERSION}}"
+ASSET_BASE_URL="${ASSET_BASE_URL:-https://github.com/${GITHUB_REPO}/releases/download/${TAG}}"
+NOTES_URL="${NOTES_URL:-https://github.com/${GITHUB_REPO}/releases/tag/${TAG}}"
 
 require_asset() {
   local name="$1"
@@ -54,15 +55,15 @@ cat > "${OUT}" <<JSON
   "version": "${VERSION}",
   "minimum_supported_version": "${MINIMUM_SUPPORTED_VERSION}",
   "mandatory": false,
-  "notes_url": "${BASE_URL}/notes.html",
+  "notes_url": "${NOTES_URL}",
   "platforms": {
 JSON
 
 first=true
-platform_entry "windows-x86_64" "${BASE_URL}/windows/rsmsg-setup-${VERSION}-x86_64.exe" "rsmsg-setup-${VERSION}-x86_64.exe"
-platform_entry "macos-aarch64" "${BASE_URL}/macos/rsmsg-${VERSION}-aarch64-apple-darwin.dmg" "rsmsg-${VERSION}-aarch64-apple-darwin.dmg"
-platform_entry "macos-x86_64" "${BASE_URL}/macos/rsmsg-${VERSION}-x86_64-apple-darwin.dmg" "rsmsg-${VERSION}-x86_64-apple-darwin.dmg"
-platform_entry "linux-x86_64" "${BASE_URL}/linux/rsmsg-${VERSION}-x86_64-unknown-linux-gnu.tar.gz" "rsmsg-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+platform_entry "windows-x86_64" "${ASSET_BASE_URL}/rsmsg-setup-${VERSION}-x86_64.exe" "rsmsg-setup-${VERSION}-x86_64.exe"
+platform_entry "macos-aarch64" "${ASSET_BASE_URL}/rsmsg-${VERSION}-aarch64-apple-darwin.dmg" "rsmsg-${VERSION}-aarch64-apple-darwin.dmg"
+platform_entry "macos-x86_64" "${ASSET_BASE_URL}/rsmsg-${VERSION}-x86_64-apple-darwin.dmg" "rsmsg-${VERSION}-x86_64-apple-darwin.dmg"
+platform_entry "linux-x86_64" "${ASSET_BASE_URL}/rsmsg-${VERSION}-x86_64-unknown-linux-gnu.tar.gz" "rsmsg-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
 
 cat >> "${OUT}" <<JSON
 
