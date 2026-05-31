@@ -83,6 +83,7 @@ pub struct MessengerApp {
     update_info: Option<UpdateInfo>,
     update_window_open: bool,
     last_sync_at: Instant,
+    last_call_signal_poll_at: Instant,
 }
 
 struct CachedVideoTexture {
@@ -159,6 +160,7 @@ struct SyncSuccess {
     peer_mappings: Vec<PeerMapping>,
     decrypted: Vec<DecryptedMessage>,
     statuses: Vec<OutgoingMessageStatus>,
+    pending_count: usize,
 }
 
 struct PeerMapping {
@@ -370,6 +372,7 @@ impl MessengerApp {
             update_info: None,
             update_window_open: false,
             last_sync_at: Instant::now(),
+            last_call_signal_poll_at: Instant::now(),
         };
         app.check_for_updates();
         app
@@ -1062,6 +1065,10 @@ impl MessengerApp {
             match rx.try_recv() {
                 Ok(result) => match result.result {
                     Ok(signals) => {
+                        if self.active_call.is_none() {
+                            self.apply_incoming_call_signals(signals);
+                            return;
+                        }
                         let accepted_text = self.t("call.accepted");
                         let declined_text = self.t("call.declined");
                         let ended_text = self.t("call.ended");
@@ -1134,6 +1141,23 @@ impl MessengerApp {
         }
 
         let Some(call) = self.active_call.as_mut() else {
+            if self.last_call_signal_poll_at.elapsed() < Duration::from_millis(1200) {
+                return;
+            }
+            let Some(auth) = self.auth.clone() else {
+                return;
+            };
+            self.last_call_signal_poll_at = Instant::now();
+            let core = self.core.clone();
+            let (tx, rx) = mpsc::channel();
+            self.call_signal_rx = Some(rx);
+            thread::spawn(move || {
+                let rt = runtime();
+                let result = rt
+                    .block_on(core.fetch_call_signals(&auth, None))
+                    .map_err(|err| format!("Call signaling failed: {err}"));
+                let _ = tx.send(CallSignalResult { result });
+            });
             return;
         };
         if !call.incoming && !call.accepted && call.started_at.elapsed() >= CALL_ANSWER_TIMEOUT {
@@ -1178,6 +1202,41 @@ impl MessengerApp {
                 .map_err(|err| format!("Call signaling failed: {err}"));
             let _ = tx.send(CallSignalResult { result });
         });
+    }
+
+    fn apply_incoming_call_signals(&mut self, signals: Vec<CallSignalItem>) {
+        for signal in signals {
+            if signal.kind != "invite" {
+                continue;
+            }
+            let peer = self
+                .history
+                .peer_by_device_uuid
+                .get(&signal.from_device_uuid)
+                .cloned()
+                .unwrap_or_else(|| {
+                    format!(
+                        "unknown:{}",
+                        &signal.from_device_uuid[..8.min(signal.from_device_uuid.len())]
+                    )
+                });
+            let video = signal.payload.contains("\"video\":true");
+            media::play_call_tone(self.settings.speaker.clone());
+            self.active_call = Some(CallState {
+                peer,
+                peer_device_uuid: signal.from_device_uuid,
+                call_id: signal.call_id,
+                video,
+                microphone_muted: false,
+                camera_disabled: false,
+                incoming: true,
+                accepted: false,
+                signaling_status: self.t("call.incoming_waiting"),
+                started_at: Instant::now(),
+                last_signal_poll_at: Instant::now(),
+            });
+            break;
+        }
     }
 
     fn start_webrtc_offer(&mut self) {
@@ -1518,11 +1577,10 @@ impl MessengerApp {
             return;
         };
         match rx.try_recv() {
-            Ok(sync) => {
-                if let Ok(success) = sync.result {
-                    self.apply_sync_success(success);
-                }
-            }
+            Ok(sync) => match sync.result {
+                Ok(success) => self.apply_sync_success(success),
+                Err(err) => self.status = self.localize_status_error(&err),
+            },
             Err(mpsc::TryRecvError::Empty) => self.sync_rx = Some(rx),
             Err(mpsc::TryRecvError::Disconnected) => {}
         }
@@ -1530,6 +1588,7 @@ impl MessengerApp {
 
     fn apply_sync_success(&mut self, success: SyncSuccess) {
         let mut changed = false;
+        let decrypted_count = success.decrypted.len();
         for mapping in success.peer_mappings {
             if !self.verify_or_pin_peer_identity(&mapping.peer, &mapping.bundle) {
                 continue;
@@ -1554,6 +1613,12 @@ impl MessengerApp {
         for msg in success.decrypted {
             self.push_incoming(msg);
             changed = true;
+        }
+        if success.pending_count > 0 && decrypted_count == 0 {
+            self.status = format!(
+                "Sync received {} pending message(s), decrypted 0. Re-open chat or trust the new key.",
+                success.pending_count
+            );
         }
         changed |= self.apply_outgoing_statuses(success.statuses);
         if let Some(auth) = self.auth.clone() {
@@ -1729,7 +1794,7 @@ impl MessengerApp {
         thread::spawn(move || {
             let rt = runtime();
             let result = rt
-                .block_on(core.derive_peer_shared_key(
+                .block_on(core.refresh_peer_shared_key(
                     &local_keys,
                     trust_peer.clone(),
                     DEFAULT_DEVICE_ID.to_string(),
@@ -3208,6 +3273,7 @@ fn run_sync_flow(
     let pending = rt
         .block_on(core.fetch_pending(&auth, Some(100)))
         .map_err(|err| format!("Sync failed: {err}"))?;
+    let pending_count = pending.len();
     let mut peer_mappings = Vec::new();
     for item in &pending {
         let peer = if let Some(peer) = peer_by_device_uuid.get(&item.from_device_uuid) {
@@ -3245,5 +3311,6 @@ fn run_sync_flow(
         peer_mappings,
         decrypted,
         statuses,
+        pending_count,
     })
 }

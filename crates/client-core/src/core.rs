@@ -543,6 +543,27 @@ impl ClientCore {
         peer_user_id: String,
         peer_device_id: String,
     ) -> Result<(String, FetchPrekeyBundleResponse)> {
+        self.derive_peer_shared_key_inner(local_keys, peer_user_id, peer_device_id, false)
+            .await
+    }
+
+    pub async fn refresh_peer_shared_key(
+        &self,
+        local_keys: &LocalDeviceKeys,
+        peer_user_id: String,
+        peer_device_id: String,
+    ) -> Result<(String, FetchPrekeyBundleResponse)> {
+        self.derive_peer_shared_key_inner(local_keys, peer_user_id, peer_device_id, true)
+            .await
+    }
+
+    async fn derive_peer_shared_key_inner(
+        &self,
+        local_keys: &LocalDeviceKeys,
+        peer_user_id: String,
+        peer_device_id: String,
+        replace_existing: bool,
+    ) -> Result<(String, FetchPrekeyBundleResponse)> {
         let bundle = self
             .transport
             .fetch_prekey_bundle(peer_user_id, peer_device_id)
@@ -555,17 +576,20 @@ impl ClientCore {
         let key_b64 = self
             .crypto
             .derive_shared_key_b64(&local_keys.identity_private_b64, &bundle.identity_key_b64)?;
-        self.peer_sessions
-            .lock()
-            .expect("peer_sessions")
-            .entry(bundle.device_uuid.clone())
-            .or_insert_with(|| PeerSession {
-                shared_key_b64: key_b64.clone(),
-                send_chain_key_b64: key_b64.clone(),
-                recv_chain_key_b64: key_b64.clone(),
-                send_counter: 0,
-                recv_counter: 0,
-            });
+        let mut sessions = self.peer_sessions.lock().expect("peer_sessions");
+        if replace_existing || !sessions.contains_key(&bundle.device_uuid) {
+            sessions.insert(
+                bundle.device_uuid.clone(),
+                PeerSession {
+                    shared_key_b64: key_b64.clone(),
+                    send_chain_key_b64: key_b64.clone(),
+                    recv_chain_key_b64: key_b64.clone(),
+                    send_counter: 0,
+                    recv_counter: 0,
+                },
+            );
+        }
+        drop(sessions);
         let _ = self.persist_sessions();
         Ok((key_b64, bundle))
     }
