@@ -547,6 +547,23 @@ impl ClientCore {
             .await
     }
 
+    pub async fn fetch_peer_bundle(
+        &self,
+        peer_user_id: String,
+        peer_device_id: String,
+    ) -> Result<FetchPrekeyBundleResponse> {
+        let bundle = self
+            .transport
+            .fetch_prekey_bundle(peer_user_id, peer_device_id)
+            .await?;
+        self.crypto.verify_prekey_signature_b64(
+            &bundle.signing_identity_key_b64,
+            &bundle.signed_prekey_b64,
+            &bundle.signed_prekey_signature_b64,
+        )?;
+        Ok(bundle)
+    }
+
     pub async fn refresh_peer_shared_key(
         &self,
         local_keys: &LocalDeviceKeys,
@@ -564,15 +581,7 @@ impl ClientCore {
         peer_device_id: String,
         replace_existing: bool,
     ) -> Result<(String, FetchPrekeyBundleResponse)> {
-        let bundle = self
-            .transport
-            .fetch_prekey_bundle(peer_user_id, peer_device_id)
-            .await?;
-        self.crypto.verify_prekey_signature_b64(
-            &bundle.signing_identity_key_b64,
-            &bundle.signed_prekey_b64,
-            &bundle.signed_prekey_signature_b64,
-        )?;
+        let bundle = self.fetch_peer_bundle(peer_user_id, peer_device_id).await?;
         let key_b64 = self
             .crypto
             .derive_shared_key_b64(&local_keys.identity_private_b64, &bundle.identity_key_b64)?;

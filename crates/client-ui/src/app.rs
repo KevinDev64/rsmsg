@@ -1556,6 +1556,9 @@ impl MessengerApp {
         self.sync_rx = Some(rx);
         let core = self.core.clone();
         let peer_by_device_uuid = self.history.peer_by_device_uuid.clone();
+        let peer_identity_key_by_peer = self.history.peer_identity_key_by_peer.clone();
+        let peer_signing_identity_key_by_peer =
+            self.history.peer_signing_identity_key_by_peer.clone();
         let peers_missing_safety = self.peers_missing_safety_numbers();
         let outgoing_message_ids = self.outgoing_message_ids();
         thread::spawn(move || {
@@ -1564,6 +1567,8 @@ impl MessengerApp {
                 local_keys,
                 auth,
                 peer_by_device_uuid,
+                peer_identity_key_by_peer,
+                peer_signing_identity_key_by_peer,
                 peers_missing_safety,
                 outgoing_message_ids,
             );
@@ -3266,6 +3271,8 @@ fn run_sync_flow(
     local_keys: LocalDeviceKeys,
     auth: DeviceAuth,
     peer_by_device_uuid: BTreeMap<String, String>,
+    peer_identity_key_by_peer: BTreeMap<String, String>,
+    peer_signing_identity_key_by_peer: BTreeMap<String, String>,
     peers_missing_safety: Vec<String>,
     outgoing_message_ids: Vec<String>,
 ) -> Result<SyncSuccess, String> {
@@ -3300,7 +3307,52 @@ fn run_sync_flow(
             }
         }
     }
-    let (decrypted, _ack_ids) = core.decrypt_pending_with_sessions(pending);
+    let (mut decrypted, _ack_ids) = core.decrypt_pending_with_sessions(pending.clone());
+    if pending_count > 0 && decrypted.is_empty() {
+        let mut refreshed = false;
+        for item in &pending {
+            let Some(peer) = peer_by_device_uuid
+                .get(&item.from_device_uuid)
+                .cloned()
+                .or_else(|| {
+                    rt.block_on(core.resolve_device_user(item.from_device_uuid.clone()))
+                        .ok()
+                })
+            else {
+                continue;
+            };
+            let Ok(bundle) =
+                rt.block_on(core.fetch_peer_bundle(peer.clone(), DEFAULT_DEVICE_ID.to_string()))
+            else {
+                continue;
+            };
+            let identity_matches = peer_identity_key_by_peer
+                .get(&peer)
+                .map(|key| key == &bundle.identity_key_b64)
+                .unwrap_or(true)
+                && peer_signing_identity_key_by_peer
+                    .get(&peer)
+                    .map(|key| key == &bundle.signing_identity_key_b64)
+                    .unwrap_or(true);
+            peer_mappings.push(PeerMapping {
+                device_uuid: item.from_device_uuid.clone(),
+                peer: peer.clone(),
+                bundle,
+            });
+            if identity_matches {
+                let _ = rt.block_on(core.refresh_peer_shared_key(
+                    &local_keys,
+                    peer,
+                    DEFAULT_DEVICE_ID.to_string(),
+                ));
+                refreshed = true;
+            }
+        }
+        if refreshed {
+            let (retried, _ack_ids) = core.decrypt_pending_with_sessions(pending);
+            decrypted = retried;
+        }
+    }
     let statuses = if outgoing_message_ids.is_empty() {
         Vec::new()
     } else {
