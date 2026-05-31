@@ -795,6 +795,22 @@ impl MessengerApp {
         self.delete_chat_confirm = Some(self.selected_chat.clone());
     }
 
+    fn reset_selected_chat_session(&mut self) {
+        if self.selected_chat.is_empty() {
+            self.status = self.t("status.select_chat_first");
+            return;
+        }
+        let peer = self.selected_chat.clone();
+        let Some(peer_device_uuid) = self.history.device_uuid_by_peer.get(&peer).cloned() else {
+            self.status = self.t("status.reopen_chat_before_sending");
+            return;
+        };
+        self.core.reset_peer_session(&peer_device_uuid);
+        self.peer_nickname_input = peer.clone();
+        self.status = self.tf("status.chat_session_reset", &[("peer", &peer)]);
+        self.open_chat();
+    }
+
     fn delete_chat_locally(&mut self, chat_name: String) {
         self.history.chats.remove(&chat_name);
         self.history.unread_by_peer.remove(&chat_name);
@@ -2059,6 +2075,9 @@ impl eframe::App for MessengerApp {
                         } else {
                             ui.label(self.t("security.open_chat_to_pin"));
                         }
+                        if ui.button(self.t("security.reset_session")).clicked() {
+                            self.reset_selected_chat_session();
+                        }
                     }
                 });
             } else {
@@ -2183,6 +2202,9 @@ impl eframe::App for MessengerApp {
                 }
                 if ui.button(self.t("chat.delete_chat")).clicked() {
                     self.request_delete_selected_chat();
+                }
+                if ui.button(self.t("security.reset_session")).clicked() {
+                    self.reset_selected_chat_session();
                 }
                 ui.separator();
                 if ui.button(self.t("call.audio_call")).clicked() {

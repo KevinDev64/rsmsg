@@ -468,6 +468,17 @@ impl ClientCore {
             .contains_key(peer_device_uuid)
     }
 
+    pub fn reset_peer_session(&self, peer_device_uuid: &str) -> bool {
+        let removed = self
+            .peer_sessions
+            .lock()
+            .expect("peer_sessions")
+            .remove(peer_device_uuid)
+            .is_some();
+        let _ = self.persist_sessions();
+        removed
+    }
+
     pub async fn fetch_pending(
         &self,
         auth: &DeviceAuth,
